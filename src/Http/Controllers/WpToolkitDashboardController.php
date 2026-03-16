@@ -58,4 +58,33 @@ class WpToolkitDashboardController extends Controller
 
         return response()->json($result);
     }
+
+    /**
+     * AJAX: Get admin credentials for a WordPress install.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function getCredentials(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id'  => 'required|integer|exists:whm_servers,id',
+            'install_id' => 'required|integer',
+            'wp_path'    => 'required|string',
+            'username'   => 'required|string|max:255',
+            'login_url'  => 'nullable|string',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+
+        $result = $this->wpToolkit->getCredentials(
+            $server,
+            (int) $request->input('install_id'),
+            $request->input('wp_path'),
+            $request->input('username'),
+            $request->input('login_url')
+        );
+
+        return response()->json($result);
+    }
 }
