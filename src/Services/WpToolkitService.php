@@ -187,6 +187,164 @@ class WpToolkitService
     }
 
     /**
+     * Get stored login credentials (admin users) for a WordPress install.
+     *
+     * Runs wp-cli via wp-toolkit to retrieve administrator usernames, emails,
+     * and display names. Also returns the loginUrl from WP Toolkit.
+     *
+     * Note: WordPress hashes passwords — plaintext passwords cannot be retrieved.
+     * WP Toolkit's one-click login uses internal session tokens, not stored passwords.
+     *
+     * @param WhmServer $server    The WHM server to connect to
+     * @param int       $installId The WP Toolkit install ID
+     * @param string    $wpPath    Full path to the WordPress install
+     * @param string    $username  The cPanel username (for fallback wp-cli)
+     * @param string|null $loginUrl The loginUrl from WP Toolkit list output
+     * @return array{success: bool, admin_users?: array, login_url?: string, raw_output?: string, error?: string}
+     */
+    public function getCredentials(WhmServer $server, int $installId, string $wpPath, string $username, ?string $loginUrl = null): array
+    {
+        $this->generic->log('info', '[WpToolkit] getCredentials starting', [
+            'server'     => $server->name,
+            'install_id' => $installId,
+            'wp_path'    => $wpPath,
+            'username'   => $username,
+        ]);
+
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return $ssh;
+        }
+
+        /** @var SSH2 $connection */
+        $connection = $ssh['connection'];
+
+        // Try wp-toolkit --wp-cli first, fall back to direct wp-cli
+        $escapedId = escapeshellarg((string) $installId);
+        $escapedPath = escapeshellarg($wpPath);
+        $escapedUser = escapeshellarg($username);
+
+        // Method 1: wp-toolkit --wp-cli (uses install ID)
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=ID,user_login,user_email,display_name --format=json 2>&1";
+
+        $this->generic->log('info', '[WpToolkit] Trying wp-toolkit --wp-cli', ['command' => $cmd]);
+        $output = trim($connection->exec($cmd));
+
+        $adminUsers = $this->parseWpCliUserList($output);
+
+        // Method 2: Direct wp-cli as cPanel user (fallback)
+        if ($adminUsers === null) {
+            $cmd = "sudo -u {$escapedUser} wp user list --role=administrator --fields=ID,user_login,user_email,display_name --format=json --path={$escapedPath} 2>&1";
+
+            $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
+            $fallbackOutput = trim($connection->exec($cmd));
+            $output .= "\n---FALLBACK---\n" . $fallbackOutput;
+
+            $adminUsers = $this->parseWpCliUserList($fallbackOutput);
+        }
+
+        // Method 3: grep wp-config.php for DB creds + query DB directly (last resort)
+        if ($adminUsers === null) {
+            $cmd = "sudo -u {$escapedUser} php -r \"
+                define('ABSPATH', {$escapedPath} . '/');
+                require({$escapedPath} . '/wp-config.php');
+                \\\$pdo = new PDO('mysql:host=' . DB_HOST . ';dbname=' . DB_NAME, DB_USER, DB_PASSWORD);
+                \\\$prefix = isset(\\\$table_prefix) ? \\\$table_prefix : 'wp_';
+                \\\$stmt = \\\$pdo->query(\\\"SELECT ID, user_login, user_email, display_name FROM \\\" . \\\$prefix . \\\"users u JOIN \\\" . \\\$prefix . \\\"usermeta m ON u.ID = m.user_id WHERE m.meta_key = '\\\" . \\\$prefix . \\\"capabilities' AND m.meta_value LIKE '%administrator%'\\\");
+                echo json_encode(\\\$stmt->fetchAll(PDO::FETCH_ASSOC));
+            \" 2>&1";
+
+            $this->generic->log('info', '[WpToolkit] Fallback to direct DB query', ['command' => mb_substr($cmd, 0, 200)]);
+            $dbOutput = trim($connection->exec($cmd));
+            $output .= "\n---DB_FALLBACK---\n" . $dbOutput;
+
+            $adminUsers = $this->parseWpCliUserList($dbOutput);
+        }
+
+        $connection->disconnect();
+
+        if ($adminUsers === null) {
+            $this->generic->log('error', '[WpToolkit] All methods failed to get admin users', [
+                'install_id' => $installId,
+                'output'     => mb_substr($output, 0, 500),
+            ]);
+            return [
+                'success'    => false,
+                'error'      => 'Could not retrieve admin users. All methods failed.',
+                'raw_output' => $output,
+            ];
+        }
+
+        $this->generic->log('info', '[WpToolkit] getCredentials complete', [
+            'install_id'  => $installId,
+            'admin_count' => count($adminUsers),
+        ]);
+
+        return [
+            'success'     => true,
+            'admin_users' => $adminUsers,
+            'login_url'   => $loginUrl,
+            'raw_output'  => $output,
+        ];
+    }
+
+    /**
+     * Parse JSON output from wp-cli `user list --format=json`.
+     *
+     * @param string $output Raw command output
+     * @return array|null Array of admin users or null if parsing failed
+     */
+    protected function parseWpCliUserList(string $output): ?array
+    {
+        if (empty($output)) {
+            return null;
+        }
+
+        // Find JSON array in output
+        $jsonStart = strpos($output, '[');
+        if ($jsonStart === false) {
+            return null;
+        }
+
+        $jsonStr = substr($output, $jsonStart);
+
+        // Find matching closing bracket
+        $depth = 0;
+        $jsonEnd = null;
+        for ($i = 0; $i < strlen($jsonStr); $i++) {
+            if ($jsonStr[$i] === '[') $depth++;
+            if ($jsonStr[$i] === ']') $depth--;
+            if ($depth === 0) {
+                $jsonEnd = $i + 1;
+                break;
+            }
+        }
+
+        if ($jsonEnd === null) {
+            return null;
+        }
+
+        $jsonStr = substr($jsonStr, 0, $jsonEnd);
+        $decoded = json_decode($jsonStr, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return null;
+        }
+
+        $users = [];
+        foreach ($decoded as $user) {
+            $users[] = [
+                'id'           => $user['ID'] ?? $user['id'] ?? null,
+                'user_login'   => $user['user_login'] ?? null,
+                'user_email'   => $user['user_email'] ?? null,
+                'display_name' => $user['display_name'] ?? null,
+            ];
+        }
+
+        return $users;
+    }
+
+    /**
      * Establish an SSH connection to a WHM server.
      *
      * Tries SSH key auth first, falls back to password.
