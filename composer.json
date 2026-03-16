@@ -1,0 +1,23 @@
+{
+    "name": "hexawebsystems/laravel-hexa-package-wptoolkit",
+    "description": "WP Toolkit integration package for Hexa Core — WordPress install discovery, credential management, and one-click login via cPanel/WHM.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "hexa_package_wptoolkit\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "hexa_package_wptoolkit\\Providers\\WpToolkitServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
