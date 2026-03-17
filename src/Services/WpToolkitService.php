@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services;
 
 use hexa_package_billing\Models\WhmServer;
+use hexa_package_billing\Services\WhmService;
 use hexa_core\Services\GenericService;
 use phpseclib3\Net\SSH2;
 use phpseclib3\Crypt\PublicKeyLoader;
@@ -16,13 +17,16 @@ use phpseclib3\Crypt\PublicKeyLoader;
 class WpToolkitService
 {
     protected GenericService $generic;
+    protected WhmService $whm;
 
     /**
      * @param GenericService $generic
+     * @param WhmService     $whm
      */
-    public function __construct(GenericService $generic)
+    public function __construct(GenericService $generic, WhmService $whm)
     {
         $this->generic = $generic;
+        $this->whm = $whm;
     }
 
     /**
@@ -342,6 +346,138 @@ class WpToolkitService
         }
 
         return $users;
+    }
+
+    /**
+     * Generate a one-click WordPress admin login URL.
+     *
+     * Deploys a temporary mu-plugin that auto-authenticates and self-deletes
+     * after use or TTL expiry.
+     *
+     * @param WhmServer $server    The WHM server
+     * @param string    $wpPath    Full path to WordPress install
+     * @param string    $username  cPanel username (file owner)
+     * @param string    $wpUser    WordPress username to log in as
+     * @param string    $siteUrl   The site URL for building the login link
+     * @return array{success: bool, url?: string, expires_in?: int, error?: string}
+     */
+    public function generateWordPressLoginUrl(WhmServer $server, string $wpPath, string $username, string $wpUser, string $siteUrl): array
+    {
+        $this->generic->log('info', '[WpToolkit] generateWordPressLoginUrl', [
+            'server'  => $server->name,
+            'wp_path' => $wpPath,
+            'wp_user' => $wpUser,
+        ]);
+
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return $ssh;
+        }
+
+        /** @var SSH2 $connection */
+        $connection = $ssh['connection'];
+
+        $token = bin2hex(random_bytes(32));
+        $ttl = 300; // 5 minutes
+        $expiry = time() + $ttl;
+
+        $muPlugin = <<<'PHP'
+<?php
+/**
+ * HWS Auto-Login — temporary mu-plugin, self-deletes after use or expiry.
+ */
+if (!defined('ABSPATH')) exit;
+add_action('init', function() {
+    if (empty($_GET['hws_login_token'])) return;
+    $token = '__TOKEN__';
+    $expiry = __EXPIRY__;
+    $wp_user = '__WP_USER__';
+    if ($_GET['hws_login_token'] !== $token || time() > $expiry) {
+        @unlink(__FILE__);
+        wp_die('Login link expired or invalid.');
+    }
+    $user = get_user_by('login', $wp_user);
+    if (!$user) { @unlink(__FILE__); wp_die('User not found.'); }
+    wp_set_auth_cookie($user->ID, true);
+    wp_set_current_user($user->ID);
+    @unlink(__FILE__);
+    wp_safe_redirect(admin_url());
+    exit;
+}, 1);
+if (time() > __EXPIRY__) { @unlink(__FILE__); }
+PHP;
+
+        $muPlugin = str_replace('__TOKEN__', $token, $muPlugin);
+        $muPlugin = str_replace('__EXPIRY__', (string) $expiry, $muPlugin);
+        $muPlugin = str_replace('__WP_USER__', addslashes($wpUser), $muPlugin);
+
+        $b64 = base64_encode($muPlugin);
+        $escapedPath = escapeshellarg($wpPath);
+        $escapedUser = escapeshellarg($username);
+        $muDir = $wpPath . '/wp-content/mu-plugins';
+        $filePath = $muDir . '/hws-auto-login.php';
+        $escapedFile = escapeshellarg($filePath);
+
+        $cmd = "mkdir -p " . escapeshellarg($muDir) . " && echo '{$b64}' | base64 -d > {$escapedFile} && chown {$escapedUser}:{$escapedUser} {$escapedFile} && chmod 644 {$escapedFile} && echo 'MU_PLUGIN_OK'";
+
+        $output = trim($connection->exec($cmd));
+        $connection->disconnect();
+
+        if (!str_contains($output, 'MU_PLUGIN_OK')) {
+            return [
+                'success' => false,
+                'error'   => 'Failed to write mu-plugin: ' . mb_substr($output, 0, 300),
+            ];
+        }
+
+        $loginUrl = rtrim($siteUrl, '/') . '/wp-login.php?hws_login_token=' . $token;
+
+        $this->generic->log('info', '[WpToolkit] WordPress login URL generated', [
+            'site' => $siteUrl, 'wp_user' => $wpUser, 'ttl' => $ttl,
+        ]);
+
+        return [
+            'success'    => true,
+            'url'        => $loginUrl,
+            'expires_in' => $ttl,
+        ];
+    }
+
+    /**
+     * Generate a one-click cPanel login URL for a cPanel account.
+     *
+     * Uses the WHM API create_user_session via the billing WhmService.
+     *
+     * @param WhmServer $server   The WHM server
+     * @param string    $username The cPanel username
+     * @return array{success: bool, url?: string, error?: string}
+     */
+    public function generateCpanelLoginUrl(WhmServer $server, string $username): array
+    {
+        $this->generic->log('info', '[WpToolkit] generateCpanelLoginUrl', [
+            'server' => $server->name, 'username' => $username,
+        ]);
+
+        return $this->whm->createCpanelSession($server, $username);
+    }
+
+    /**
+     * Generate a one-click WHM reseller login URL.
+     *
+     * Uses the WHM API create_user_session with service=whostmgrd
+     * via the billing WhmService.
+     *
+     * @param WhmServer $server   The WHM server
+     * @param string    $username The reseller username
+     * @return array{success: bool, url?: string, error?: string}
+     */
+    public function generateWhmResellerLoginUrl(WhmServer $server, string $username): array
+    {
+        $this->generic->log('info', '[WpToolkit] generateWhmResellerLoginUrl', [
+            'server' => $server->name, 'username' => $username,
+        ]);
+
+        return $this->whm->createWhmSession($server, $username);
     }
 
     /**

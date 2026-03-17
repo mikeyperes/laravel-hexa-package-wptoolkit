@@ -87,4 +87,71 @@ class WpToolkitDashboardController extends Controller
 
         return response()->json($result);
     }
+
+    /**
+     * AJAX: Generate one-click WordPress login URL.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function wpLogin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id' => 'required|integer|exists:whm_servers,id',
+            'wp_path'   => 'required|string',
+            'username'  => 'required|string|max:255',
+            'wp_user'   => 'required|string|max:255',
+            'site_url'  => 'required|string',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+
+        $result = $this->wpToolkit->generateWordPressLoginUrl(
+            $server,
+            $request->input('wp_path'),
+            $request->input('username'),
+            $request->input('wp_user'),
+            $request->input('site_url')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
+     * AJAX: Generate one-click cPanel login URL.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function cpanelLogin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id' => 'required|integer|exists:whm_servers,id',
+            'username'  => 'required|string|max:255',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+        $result = $this->wpToolkit->generateCpanelLoginUrl($server, $request->input('username'));
+
+        return response()->json($result);
+    }
+
+    /**
+     * AJAX: Generate one-click WHM reseller login URL.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function whmResellerLogin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id' => 'required|integer|exists:whm_servers,id',
+            'username'  => 'required|string|max:255',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+        $result = $this->wpToolkit->generateWhmResellerLoginUrl($server, $request->input('username'));
+
+        return response()->json($result);
+    }
 }
