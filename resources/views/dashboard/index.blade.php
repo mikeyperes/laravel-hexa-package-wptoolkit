@@ -73,6 +73,7 @@
                 <input type="text" id="cred-username" class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-36" placeholder="username">
             </div>
             <input type="hidden" id="cred-login-url" value="">
+            <input type="hidden" id="cred-site-url" value="">
             <div>
                 <button id="btn-get-creds" class="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 flex items-center gap-2">
                     <svg id="spinner-get-creds" class="hidden animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -158,13 +159,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     html += '</tr></thead><tbody>';
                     installs.forEach(function(inst) {
                         const escapedPath = (inst.path || '').replace(/'/g, "\\'");
-                        const escapedUrl = (inst.login_url || inst.url || '').replace(/'/g, "\\'");
+                        const escapedLoginUrl = (inst.login_url || inst.url || '').replace(/'/g, "\\'");
+                        const escapedSiteUrl = (inst.url || '').replace(/'/g, "\\'");
                         html += '<tr class="border-b border-gray-100">';
                         html += '<td class="py-2 px-2">' + (inst.id || '-') + '</td>';
                         html += '<td class="py-2 px-2 break-words">' + (inst.url || '-') + '</td>';
                         html += '<td class="py-2 px-2 break-words">' + (inst.path || '-') + '</td>';
                         html += '<td class="py-2 px-2">' + (inst.version || '-') + '</td>';
-                        html += '<td class="py-2 px-2"><button onclick="fillCredForm(' + (inst.id || 0) + ', \'' + escapedPath + '\', \'' + escapedUrl + '\')" class="text-purple-600 hover:text-purple-800 text-xs font-medium">Get Credentials</button></td>';
+                        html += '<td class="py-2 px-2"><button onclick="fillCredForm(' + (inst.id || 0) + ', \'' + escapedPath + '\', \'' + escapedLoginUrl + '\', \'' + escapedSiteUrl + '\')" class="text-purple-600 hover:text-purple-800 text-xs font-medium">Get Credentials</button></td>';
                         html += '</tr>';
                     });
                     html += '</tbody></table>';
@@ -195,13 +197,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const credRaw = document.getElementById('cred-raw-output');
     const credParsed = document.getElementById('cred-parsed');
 
-    window.fillCredForm = function(installId, wpPath, loginUrl) {
+    window.fillCredForm = function(installId, wpPath, loginUrl, siteUrl) {
         document.getElementById('cred-install-id').value = installId;
         document.getElementById('cred-wp-path').value = wpPath;
         document.getElementById('cred-login-url').value = loginUrl;
-        // Auto-fill username from the installs form
+        document.getElementById('cred-site-url').value = siteUrl || '';
         document.getElementById('cred-username').value = document.getElementById('cpanel-username').value.trim();
-        // Auto-click
         credBtn.click();
     };
 
@@ -250,19 +251,29 @@ document.addEventListener('DOMContentLoaded', function() {
                     credParsed.textContent = 'No admin users found.';
                 } else {
                     let html = '';
+
+                    // Quick login buttons
+                    const cpUser = document.getElementById('cred-username').value.trim();
+                    html += '<div class="mb-4 flex flex-wrap gap-2">';
+                    html += '<button onclick="doCpanelLogin()" class="bg-orange-600 text-white px-3 py-1.5 rounded text-xs hover:bg-orange-700">cPanel Login ↗</button>';
+                    html += '<button onclick="doWhmResellerLogin()" class="bg-red-600 text-white px-3 py-1.5 rounded text-xs hover:bg-red-700">WHM Reseller Login ↗</button>';
+                    html += '</div>';
+
                     if (data.login_url) {
                         html += '<div class="mb-3 text-xs"><strong>WP Toolkit Login URL:</strong> <a href="' + data.login_url + '" target="_blank" class="text-blue-600 hover:underline">' + data.login_url + ' ↗</a></div>';
                     }
                     html += '<table class="w-full text-left text-sm">';
                     html += '<thead><tr class="border-b border-gray-200">';
-                    html += '<th class="py-2 px-2">ID</th><th class="py-2 px-2">Username</th><th class="py-2 px-2">Email</th><th class="py-2 px-2">Display Name</th>';
+                    html += '<th class="py-2 px-2">ID</th><th class="py-2 px-2">Username</th><th class="py-2 px-2">Email</th><th class="py-2 px-2">Display Name</th><th class="py-2 px-2">Actions</th>';
                     html += '</tr></thead><tbody>';
                     users.forEach(function(u) {
+                        const safeLogin = (u.user_login || '').replace(/'/g, "\\'");
                         html += '<tr class="border-b border-gray-100">';
                         html += '<td class="py-2 px-2">' + (u.id || '-') + '</td>';
                         html += '<td class="py-2 px-2">' + (u.user_login || '-') + '</td>';
                         html += '<td class="py-2 px-2 break-words">' + (u.user_email || '-') + '</td>';
                         html += '<td class="py-2 px-2">' + (u.display_name || '-') + '</td>';
+                        html += '<td class="py-2 px-2"><button onclick="doWpLogin(\'' + safeLogin + '\')" class="bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700">WP Login ↗</button></td>';
                         html += '</tr>';
                     });
                     html += '</tbody></table>';
@@ -284,6 +295,95 @@ document.addEventListener('DOMContentLoaded', function() {
             credBtn.disabled = false;
         });
     });
+
+    // --- Login actions ---
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '{{ csrf_token() }}';
+
+    window.doWpLogin = function(wpUser) {
+        const serverId = document.getElementById('server-select').value;
+        const wpPath = document.getElementById('cred-wp-path').value;
+        const username = document.getElementById('cred-username').value;
+        const siteUrl = document.getElementById('cred-site-url').value;
+
+        if (!serverId || !wpPath || !username || !wpUser || !siteUrl) {
+            showCredBanner('error', 'Missing data for WP login.');
+            return;
+        }
+
+        showCredBanner('success', 'Generating WP login URL...');
+
+        fetch('{{ route("wptoolkit.wp-login") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ server_id: serverId, wp_path: wpPath, username: username, wp_user: wpUser, site_url: siteUrl }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.url) {
+                showCredBanner('success', 'Login URL generated (expires in ' + (data.expires_in || 300) + 's). Opening...');
+                window.open(data.url, '_blank');
+            } else {
+                showCredBanner('error', data.error || 'Failed to generate login URL.');
+            }
+        })
+        .catch(err => showCredBanner('error', 'Request failed: ' + err.message));
+    };
+
+    window.doCpanelLogin = function() {
+        const serverId = document.getElementById('server-select').value;
+        const username = document.getElementById('cred-username').value;
+
+        if (!serverId || !username) {
+            showCredBanner('error', 'Missing server or username.');
+            return;
+        }
+
+        showCredBanner('success', 'Generating cPanel login URL...');
+
+        fetch('{{ route("wptoolkit.cpanel-login") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ server_id: serverId, username: username }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.url) {
+                showCredBanner('success', 'cPanel login URL generated. Opening...');
+                window.open(data.url, '_blank');
+            } else {
+                showCredBanner('error', data.error || 'Failed to generate cPanel login URL.');
+            }
+        })
+        .catch(err => showCredBanner('error', 'Request failed: ' + err.message));
+    };
+
+    window.doWhmResellerLogin = function() {
+        const serverId = document.getElementById('server-select').value;
+        const username = document.getElementById('cred-username').value;
+
+        if (!serverId || !username) {
+            showCredBanner('error', 'Missing server or username.');
+            return;
+        }
+
+        showCredBanner('success', 'Generating WHM reseller login URL...');
+
+        fetch('{{ route("wptoolkit.whm-reseller-login") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ server_id: serverId, username: username }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.url) {
+                showCredBanner('success', 'WHM reseller login URL generated. Opening...');
+                window.open(data.url, '_blank');
+            } else {
+                showCredBanner('error', data.error || 'Failed to generate WHM login URL. Account may not be a reseller.');
+            }
+        })
+        .catch(err => showCredBanner('error', 'Request failed: ' + err.message));
+    };
 
     function showCredBanner(type, message) {
         credBanner.classList.remove('hidden', 'bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800');
