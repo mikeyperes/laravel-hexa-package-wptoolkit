@@ -1,3 +1,4 @@
+@if(\hexa_core\Models\Setting::isPackageEnabled('hexawebsystems/laravel-hexa-package-wptoolkit'))
 @push('sidebar-menu')
 @if(auth()->check())
 <a href="{{ route('wptoolkit.index') }}"
@@ -9,3 +10,4 @@
 </a>
 @endif
 @endpush
+@endif
