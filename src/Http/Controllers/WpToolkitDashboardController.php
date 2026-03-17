@@ -3,8 +3,8 @@
 namespace hexa_package_wptoolkit\Http\Controllers;
 
 use hexa_core\Http\Controllers\Controller;
-use hexa_package_billing\Models\WhmServer;
-use hexa_package_billing\Models\HostingAccount;
+use hexa_package_whm\Models\WhmServer;
+use hexa_package_hosting\Models\HostingAccount;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
