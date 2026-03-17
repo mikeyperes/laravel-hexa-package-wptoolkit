@@ -2,8 +2,8 @@
 
 namespace hexa_package_wptoolkit\Services;
 
-use hexa_package_billing\Models\WhmServer;
-use hexa_package_billing\Services\WhmService;
+use hexa_package_whm\Models\WhmServer;
+use hexa_package_whm\Services\WhmService;
 use hexa_core\Services\GenericService;
 use phpseclib3\Net\SSH2;
 use phpseclib3\Crypt\PublicKeyLoader;
