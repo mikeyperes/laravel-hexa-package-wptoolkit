@@ -65,10 +65,10 @@
                 <div>
                     <label class="block text-xs font-medium text-gray-500 mb-1">Login URL</label>
                     <div id="action-login-url" class="text-sm break-words">-</div>
-                </div>
-                <div id="action-custom-login-row" class="hidden">
-                    <label class="block text-xs font-medium text-gray-500 mb-1">Custom Login URL (modified wp-admin)</label>
-                    <div id="action-custom-login-url" class="text-sm break-words font-semibold text-orange-600">-</div>
+                    <div id="action-login-modified" class="hidden mt-1">
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-700">Modified from default</span>
+                        <div id="action-login-default" class="text-xs text-gray-400 line-through mt-0.5"></div>
+                    </div>
                 </div>
 
                 {{-- Stored WP Credentials --}}
@@ -285,13 +285,10 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('action-wp-path').textContent = inst.path || '-';
         document.getElementById('action-version').textContent = inst.version || '-';
 
-        const loginUrl = inst.url ? inst.url.replace(/\/$/, '') + '/wp-login.php' : null;
+        // Show default login URL initially — will be overwritten by WP Toolkit data if available
         const loginUrlEl = document.getElementById('action-login-url');
-        if (loginUrl) {
-            loginUrlEl.innerHTML = '<a href="' + loginUrl + '" target="_blank" class="text-blue-600 hover:underline">' + loginUrl + ' &#8599;</a>';
-        } else {
-            loginUrlEl.textContent = '-';
-        }
+        loginUrlEl.innerHTML = '<span class="text-gray-400 text-xs">Loading from WP Toolkit...</span>';
+        document.getElementById('action-login-modified').classList.add('hidden');
 
         // Reset state
         document.getElementById('password-box').classList.add('hidden');
@@ -312,8 +309,8 @@ document.addEventListener('DOMContentLoaded', function() {
         loading.classList.remove('hidden');
         list.innerHTML = '';
 
-        // Reset custom login URL and creds
-        document.getElementById('action-custom-login-row').classList.add('hidden');
+        // Reset creds and login info
+        document.getElementById('action-login-modified').classList.add('hidden');
         document.getElementById('stored-creds-row').classList.add('hidden');
         document.getElementById('db-creds-row').classList.add('hidden');
 
@@ -334,13 +331,18 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => {
             loading.classList.add('hidden');
 
-            // Show custom login URL if detected
-            if (data.custom_login_url) {
-                const customRow = document.getElementById('action-custom-login-row');
-                const customEl = document.getElementById('action-custom-login-url');
-                const fullUrl = (inst.url || '').replace(/\/$/, '') + '/' + data.custom_login_url;
-                customEl.innerHTML = '<a href="' + fullUrl + '" target="_blank" class="text-orange-600 hover:underline">' + fullUrl + ' &#8599;</a>';
-                customRow.classList.remove('hidden');
+            // Show login URL from WP Toolkit (authoritative)
+            if (data.login_info && data.login_info.url) {
+                const loginUrlEl = document.getElementById('action-login-url');
+                loginUrlEl.innerHTML = '<a href="' + data.login_info.url + '" target="_blank" class="text-blue-600 hover:underline">' + data.login_info.url + ' &#8599;</a>';
+
+                if (data.login_info.is_modified) {
+                    const modifiedEl = document.getElementById('action-login-modified');
+                    modifiedEl.classList.remove('hidden');
+                    if (data.login_info.default_url) {
+                        document.getElementById('action-login-default').textContent = data.login_info.default_url;
+                    }
+                }
             }
 
             // Show stored WP credentials if available
