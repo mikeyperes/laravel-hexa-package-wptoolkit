@@ -39,6 +39,20 @@ class WpToolkitDashboardController extends Controller
     }
 
     /**
+     * Show the raw dev/test view.
+     *
+     * @return \Illuminate\View\View
+     */
+    public function raw()
+    {
+        $servers = WhmServer::where('is_active', true)->get();
+
+        return view('wptoolkit::raw.index', [
+            'servers' => $servers,
+        ]);
+    }
+
+    /**
      * AJAX: Get ALL WordPress installs on a server.
      *
      * @param Request $request
