@@ -409,11 +409,7 @@ class WpToolkitService
             $adminUsers = $this->parseWpCliUserList($dbOutput);
         }
 
-        // Detect custom login URL (WPS Hide Login, iThemes Security, etc.)
-        $customLoginUrl = $this->detectCustomLoginUrl($connection, $installId, $wpPath, $username);
-        $output .= "\n---LOGIN_URL---\n" . ($customLoginUrl['raw'] ?? '');
-
-        // Get stored credentials from WP Toolkit (raw username + password)
+        // Get stored credentials, DB creds, and login URL from WP Toolkit
         $storedCreds = $this->getStoredCredentials($connection, $installId, $wpPath, $username);
         $output .= "\n---STORED_CREDS---\n" . ($storedCreds['raw'] ?? '');
 
@@ -440,7 +436,7 @@ class WpToolkitService
             'success'            => true,
             'admin_users'        => $adminUsers,
             'login_url'          => $loginUrl,
-            'custom_login_url'   => $customLoginUrl['url'] ?? null,
+            'login_info'         => $storedCreds['login_info'] ?? null,
             'stored_credentials' => $storedCreds['credentials'] ?? null,
             'db_credentials'     => $storedCreds['db'] ?? null,
             'raw_output'         => $output,
@@ -740,11 +736,12 @@ PHP;
         $raw = '';
         $credentials = null;
         $dbCreds = null;
+        $loginInfo = null;
 
-        // Method 1: wp-toolkit --info (stored admin credentials)
+        // Method 1: wp-toolkit --info (stored admin credentials + login URL)
         $cmd = "wp-toolkit --info -instance-id {$escapedId} -format json 2>&1";
         $output = trim($connection->exec($cmd));
-        $raw .= "wp-toolkit --info: " . mb_substr($output, 0, 1000) . "\n";
+        $raw .= "wp-toolkit --info: " . mb_substr($output, 0, 2000) . "\n";
 
         if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not found')) {
             // Find JSON in output
@@ -762,15 +759,40 @@ PHP;
                     // Normalize: might be wrapped in array
                     $info = isset($decoded[0]) ? $decoded[0] : $decoded;
 
+                    // Admin credentials
                     $adminLogin = $info['adminLogin'] ?? $info['admin_login'] ?? $info['adminUser'] ?? $info['admin_user'] ?? null;
                     $adminPass = $info['adminPassword'] ?? $info['admin_password'] ?? $info['adminPass'] ?? $info['admin_pass'] ?? null;
-                    $adminEmail = $info['adminEmail'] ?? $info['admin_email'] ?? null;
+                    $adminEmail = $info['adminEmail'] ?? $info['admin_email'] ?? $info['admin_email'] ?? null;
 
                     if ($adminLogin) {
                         $credentials = [
                             'username' => $adminLogin,
                             'password' => $adminPass,
                             'email'    => $adminEmail,
+                        ];
+                    }
+
+                    // Login URL from WP Toolkit (authoritative source)
+                    $siteUrl = $info['siteUrl'] ?? null;
+                    $wptLoginUrl = $info['loginUrl'] ?? null;
+
+                    if ($wptLoginUrl) {
+                        // Determine default login URL for comparison
+                        $defaultLogin = $siteUrl ? rtrim($siteUrl, '/') . '/wp-login.php' : null;
+                        $defaultAdmin = $siteUrl ? rtrim($siteUrl, '/') . '/wp-admin/' : null;
+
+                        $isModified = true;
+                        if ($defaultLogin && $wptLoginUrl === $defaultLogin) {
+                            $isModified = false;
+                        }
+                        if ($defaultAdmin && $wptLoginUrl === $defaultAdmin) {
+                            $isModified = false;
+                        }
+
+                        $loginInfo = [
+                            'url'         => $wptLoginUrl,
+                            'is_modified' => $isModified,
+                            'default_url' => $defaultLogin,
                         ];
                     }
                 }
@@ -797,6 +819,7 @@ PHP;
         return [
             'credentials' => $credentials,
             'db'          => $dbCreds,
+            'login_info'  => $loginInfo,
             'raw'         => $raw,
         ];
     }
