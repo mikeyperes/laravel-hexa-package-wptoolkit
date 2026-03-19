@@ -118,6 +118,35 @@ class WpToolkitDashboardController extends Controller
     }
 
     /**
+     * AJAX: Reset a WordPress user's password.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id'  => 'required|integer|exists:whm_servers,id',
+            'install_id' => 'required|integer',
+            'wp_path'    => 'required|string',
+            'username'   => 'required|string|max:255',
+            'wp_user'    => 'required|string|max:255',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+
+        $result = $this->wpToolkit->resetWordPressPassword(
+            $server,
+            (int) $request->input('install_id'),
+            $request->input('wp_path'),
+            $request->input('username'),
+            $request->input('wp_user')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
      * AJAX: Generate one-click cPanel login URL.
      *
      * @param Request $request
