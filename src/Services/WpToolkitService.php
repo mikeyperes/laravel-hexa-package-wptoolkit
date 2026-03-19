@@ -349,6 +349,88 @@ class WpToolkitService
     }
 
     /**
+     * Reset a WordPress user's password via wp-cli.
+     *
+     * Generates a random password, sets it via wp-toolkit --wp-cli or
+     * direct wp-cli fallback, and returns the new plaintext password.
+     *
+     * @param WhmServer $server   The WHM server
+     * @param int       $installId WP Toolkit install ID
+     * @param string    $wpPath   Full path to WordPress install
+     * @param string    $username cPanel username
+     * @param string    $wpUser   WordPress username to reset
+     * @return array{success: bool, password?: string, wp_user?: string, error?: string}
+     */
+    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser): array
+    {
+        $this->generic->log('info', '[WpToolkit] resetWordPressPassword starting', [
+            'server'     => $server->name,
+            'install_id' => $installId,
+            'wp_path'    => $wpPath,
+            'wp_user'    => $wpUser,
+        ]);
+
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return $ssh;
+        }
+
+        /** @var SSH2 $connection */
+        $connection = $ssh['connection'];
+
+        // Generate a random password
+        $newPassword = bin2hex(random_bytes(12));
+
+        $escapedId = escapeshellarg((string) $installId);
+        $escapedPath = escapeshellarg($wpPath);
+        $escapedUser = escapeshellarg($username);
+        $escapedWpUser = escapeshellarg($wpUser);
+        $escapedPass = escapeshellarg($newPassword);
+
+        // Method 1: wp-toolkit --wp-cli
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
+        $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', ['command' => $cmd]);
+        $output = trim($connection->exec($cmd));
+
+        if (str_contains($output, 'Success')) {
+            $connection->disconnect();
+            $this->generic->log('info', '[WpToolkit] Password reset success via wp-toolkit');
+            return [
+                'success'  => true,
+                'password' => $newPassword,
+                'wp_user'  => $wpUser,
+            ];
+        }
+
+        // Method 2: Direct wp-cli as cPanel user
+        $cmd = "sudo -u {$escapedUser} wp user update {$escapedWpUser} --user_pass={$escapedPass} --path={$escapedPath} 2>&1";
+        $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
+        $fallbackOutput = trim($connection->exec($cmd));
+        $output .= "\n---FALLBACK---\n" . $fallbackOutput;
+
+        $connection->disconnect();
+
+        if (str_contains($fallbackOutput, 'Success')) {
+            $this->generic->log('info', '[WpToolkit] Password reset success via direct wp-cli');
+            return [
+                'success'  => true,
+                'password' => $newPassword,
+                'wp_user'  => $wpUser,
+            ];
+        }
+
+        $this->generic->log('error', '[WpToolkit] Password reset failed', [
+            'output' => mb_substr($output, 0, 500),
+        ]);
+
+        return [
+            'success'    => false,
+            'error'      => 'Password reset failed. Output: ' . mb_substr($output, 0, 300),
+            'raw_output' => $output,
+        ];
+    }
+
+    /**
      * Generate a one-click WordPress admin login URL.
      *
      * Deploys a temporary mu-plugin that auto-authenticates and self-deletes

@@ -102,6 +102,82 @@
         </div>
     </div>
 
+    {{-- Step 3: Selected User Actions --}}
+    <div id="step3-panel" class="hidden bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">3. WordPress User Actions</h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {{-- Left: User info --}}
+            <div>
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Username</label>
+                        <div id="step3-username" class="text-sm font-semibold text-gray-900">-</div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Email</label>
+                        <div id="step3-email" class="text-sm text-gray-700 break-words">-</div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Display Name</label>
+                        <div id="step3-display-name" class="text-sm text-gray-700">-</div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Site URL</label>
+                        <div id="step3-site-url" class="text-sm text-gray-700 break-words">-</div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Login URL</label>
+                        <div id="step3-login-url-display" class="text-sm break-words">-</div>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Right: Actions --}}
+            <div class="space-y-3">
+                {{-- One-click WP Login --}}
+                <button id="btn-step3-wp-login" class="w-full bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm hover:bg-green-700 flex items-center justify-center gap-2">
+                    <svg id="spinner-step3-wp-login" class="hidden animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span id="btn-text-step3-wp-login">One-Click WP Admin Login</span>
+                </button>
+
+                {{-- Reset Password --}}
+                <button id="btn-step3-reset-pass" class="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg text-sm hover:bg-red-700 flex items-center justify-center gap-2">
+                    <svg id="spinner-step3-reset" class="hidden animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span id="btn-text-step3-reset">Reset Password</span>
+                </button>
+
+                {{-- cPanel Login --}}
+                <button id="btn-step3-cpanel" class="w-full bg-orange-600 text-white px-4 py-2.5 rounded-lg text-sm hover:bg-orange-700 flex items-center justify-center gap-2">
+                    <svg id="spinner-step3-cpanel" class="hidden animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span id="btn-text-step3-cpanel">cPanel Login</span>
+                </button>
+
+                {{-- Password display --}}
+                <div id="step3-password-box" class="hidden bg-gray-900 rounded-lg p-4">
+                    <label class="block text-xs font-medium text-gray-400 mb-1">New Password</label>
+                    <div class="flex items-center gap-2">
+                        <span id="step3-password-value" class="text-green-400 font-mono text-sm break-words"></span>
+                        <button id="btn-copy-pass" class="text-gray-400 hover:text-white text-xs px-2 py-1 border border-gray-600 rounded">Copy</button>
+                    </div>
+                    <div id="step3-copy-confirm" class="hidden text-green-400 text-xs mt-1">Copied</div>
+                </div>
+            </div>
+        </div>
+
+        {{-- Step 3 result banner --}}
+        <div id="step3-banner" class="hidden mt-4 px-4 py-3 rounded-lg text-sm flex items-center gap-2"></div>
+    </div>
+
 </div>
 
 <script>
@@ -268,12 +344,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     html += '</tr></thead><tbody>';
                     users.forEach(function(u) {
                         const safeLogin = (u.user_login || '').replace(/'/g, "\\'");
-                        html += '<tr class="border-b border-gray-100">';
+                        const safeEmail = (u.user_email || '').replace(/'/g, "\\'");
+                        const safeDisplay = (u.display_name || '').replace(/'/g, "\\'");
+                        html += '<tr class="border-b border-gray-100 cursor-pointer hover:bg-blue-50" onclick="selectAdminUser(\'' + safeLogin + '\', \'' + safeEmail + '\', \'' + safeDisplay + '\')">';
                         html += '<td class="py-2 px-2">' + (u.id || '-') + '</td>';
                         html += '<td class="py-2 px-2">' + (u.user_login || '-') + '</td>';
                         html += '<td class="py-2 px-2 break-words">' + (u.user_email || '-') + '</td>';
                         html += '<td class="py-2 px-2">' + (u.display_name || '-') + '</td>';
-                        html += '<td class="py-2 px-2"><button onclick="doWpLogin(\'' + safeLogin + '\')" class="bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700">WP Login ↗</button></td>';
+                        html += '<td class="py-2 px-2"><span class="text-blue-600 text-xs font-medium">Select</span></td>';
                         html += '</tr>';
                     });
                     html += '</tbody></table>';
@@ -404,6 +482,180 @@ document.addEventListener('DOMContentLoaded', function() {
             banner.classList.add('bg-red-100', 'text-red-800');
             banner.innerHTML = '<svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg> ' + message;
         }
+    }
+
+    // --- Step 3: Selected admin user actions ---
+    const step3Panel = document.getElementById('step3-panel');
+    const step3Banner = document.getElementById('step3-banner');
+    const step3PasswordBox = document.getElementById('step3-password-box');
+    const step3PasswordValue = document.getElementById('step3-password-value');
+
+    // Store selected user context
+    let selectedWpUser = '';
+
+    window.selectAdminUser = function(wpUser, email, displayName) {
+        selectedWpUser = wpUser;
+        const siteUrl = document.getElementById('cred-site-url').value || '';
+
+        // Populate step 3
+        document.getElementById('step3-username').textContent = wpUser;
+        document.getElementById('step3-email').textContent = email || '-';
+        document.getElementById('step3-display-name').textContent = displayName || '-';
+        document.getElementById('step3-site-url').textContent = siteUrl || '-';
+
+        const loginUrl = siteUrl ? siteUrl.replace(/\/$/, '') + '/wp-login.php' : '-';
+        const loginUrlEl = document.getElementById('step3-login-url-display');
+        if (siteUrl) {
+            loginUrlEl.innerHTML = '<a href="' + loginUrl + '" target="_blank" class="text-blue-600 hover:underline">' + loginUrl + ' &#8599;</a>';
+        } else {
+            loginUrlEl.textContent = '-';
+        }
+
+        // Reset password display
+        step3PasswordBox.classList.add('hidden');
+        step3Banner.classList.add('hidden');
+
+        // Show panel
+        step3Panel.classList.remove('hidden');
+        step3Panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+
+    // One-click WP login
+    document.getElementById('btn-step3-wp-login').addEventListener('click', function() {
+        if (!selectedWpUser) return;
+
+        const serverId = document.getElementById('server-select').value;
+        const wpPath = document.getElementById('cred-wp-path').value;
+        const username = document.getElementById('cred-username').value;
+        const siteUrl = document.getElementById('cred-site-url').value;
+        const btn = this;
+        const spinner = document.getElementById('spinner-step3-wp-login');
+        const btnText = document.getElementById('btn-text-step3-wp-login');
+
+        spinner.classList.remove('hidden');
+        btnText.textContent = 'Generating...';
+        btn.disabled = true;
+
+        fetch('{{ route("wptoolkit.wp-login") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ server_id: serverId, wp_path: wpPath, username: username, wp_user: selectedWpUser, site_url: siteUrl }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.url) {
+                showStep3Banner('success', 'Login URL generated (expires in ' + (data.expires_in || 300) + 's). Opening...');
+                window.open(data.url, '_blank');
+            } else {
+                showStep3Banner('error', data.error || 'Failed to generate login URL.');
+            }
+        })
+        .catch(err => showStep3Banner('error', 'Request failed: ' + err.message))
+        .finally(() => {
+            spinner.classList.add('hidden');
+            btnText.textContent = 'One-Click WP Admin Login';
+            btn.disabled = false;
+        });
+    });
+
+    // Reset password
+    document.getElementById('btn-step3-reset-pass').addEventListener('click', function() {
+        if (!selectedWpUser) return;
+
+        const serverId = document.getElementById('server-select').value;
+        const installId = document.getElementById('cred-install-id').value;
+        const wpPath = document.getElementById('cred-wp-path').value;
+        const username = document.getElementById('cred-username').value;
+        const btn = this;
+        const spinner = document.getElementById('spinner-step3-reset');
+        const btnText = document.getElementById('btn-text-step3-reset');
+
+        spinner.classList.remove('hidden');
+        btnText.textContent = 'Resetting...';
+        btn.disabled = true;
+        step3PasswordBox.classList.add('hidden');
+
+        fetch('{{ route("wptoolkit.reset-password") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ server_id: serverId, install_id: installId, wp_path: wpPath, username: username, wp_user: selectedWpUser }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.password) {
+                showStep3Banner('success', 'Password reset for ' + data.wp_user);
+                step3PasswordValue.textContent = data.password;
+                step3PasswordBox.classList.remove('hidden');
+            } else {
+                showStep3Banner('error', data.error || 'Password reset failed.');
+            }
+        })
+        .catch(err => showStep3Banner('error', 'Request failed: ' + err.message))
+        .finally(() => {
+            spinner.classList.add('hidden');
+            btnText.textContent = 'Reset Password';
+            btn.disabled = false;
+        });
+    });
+
+    // cPanel login
+    document.getElementById('btn-step3-cpanel').addEventListener('click', function() {
+        const serverId = document.getElementById('server-select').value;
+        const username = document.getElementById('cred-username').value;
+        const btn = this;
+        const spinner = document.getElementById('spinner-step3-cpanel');
+        const btnText = document.getElementById('btn-text-step3-cpanel');
+
+        if (!serverId || !username) {
+            showStep3Banner('error', 'Missing server or username.');
+            return;
+        }
+
+        spinner.classList.remove('hidden');
+        btnText.textContent = 'Generating...';
+        btn.disabled = true;
+
+        fetch('{{ route("wptoolkit.cpanel-login") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+            body: JSON.stringify({ server_id: serverId, username: username }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.url) {
+                showStep3Banner('success', 'cPanel login URL generated. Opening...');
+                window.open(data.url, '_blank');
+            } else {
+                showStep3Banner('error', data.error || 'Failed to generate cPanel login URL.');
+            }
+        })
+        .catch(err => showStep3Banner('error', 'Request failed: ' + err.message))
+        .finally(() => {
+            spinner.classList.add('hidden');
+            btnText.textContent = 'cPanel Login';
+            btn.disabled = false;
+        });
+    });
+
+    // Copy password
+    document.getElementById('btn-copy-pass').addEventListener('click', function() {
+        const pass = step3PasswordValue.textContent;
+        if (pass) {
+            navigator.clipboard.writeText(pass);
+            const confirm = document.getElementById('step3-copy-confirm');
+            confirm.classList.remove('hidden');
+            setTimeout(() => confirm.classList.add('hidden'), 2000);
+        }
+    });
+
+    function showStep3Banner(type, message) {
+        step3Banner.classList.remove('hidden', 'bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800');
+        if (type === 'success') {
+            step3Banner.classList.add('bg-green-100', 'text-green-800');
+        } else {
+            step3Banner.classList.add('bg-red-100', 'text-red-800');
+        }
+        step3Banner.textContent = message;
     }
 });
 </script>
