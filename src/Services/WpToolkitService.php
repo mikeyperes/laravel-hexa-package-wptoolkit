@@ -827,7 +827,7 @@ PHP;
         $output = trim($connection->exec($cmd));
         $raw .= "whl_page: {$output}\n";
 
-        if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not exist') && !str_contains($output, 'Could not')) {
+        if ($this->isValidLoginSlug($output)) {
             return ['url' => $output, 'raw' => $raw];
         }
 
@@ -836,7 +836,7 @@ PHP;
         $output = trim($connection->exec($cmd));
         $raw .= "whl_page (direct): {$output}\n";
 
-        if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not exist') && !str_contains($output, 'Could not')) {
+        if ($this->isValidLoginSlug($output)) {
             return ['url' => $output, 'raw' => $raw];
         }
 
@@ -845,10 +845,10 @@ PHP;
         $itsecOutput = trim($connection->exec($cmd));
         $raw .= "itsec-storage: " . mb_substr($itsecOutput, 0, 300) . "\n";
 
-        if ($itsecOutput && !str_contains($itsecOutput, 'Error')) {
+        if ($itsecOutput && $this->isValidLoginSlug($itsecOutput, false)) {
             $itsec = json_decode($itsecOutput, true);
             $hideBackend = $itsec['hide-backend']['slug'] ?? null;
-            if ($hideBackend) {
+            if ($hideBackend && $this->isValidLoginSlug($hideBackend)) {
                 return ['url' => $hideBackend, 'raw' => $raw];
             }
         }
@@ -858,15 +858,57 @@ PHP;
         $aioOutput = trim($connection->exec($cmd));
         $raw .= "aio_wp_security: " . mb_substr($aioOutput, 0, 300) . "\n";
 
-        if ($aioOutput && !str_contains($aioOutput, 'Error')) {
+        if ($aioOutput && $this->isValidLoginSlug($aioOutput, false)) {
             $aio = json_decode($aioOutput, true);
             $renamePage = $aio['aiowps_login_page_slug'] ?? null;
-            if ($renamePage) {
+            if ($renamePage && $this->isValidLoginSlug($renamePage)) {
                 return ['url' => $renamePage, 'raw' => $raw];
             }
         }
 
         return ['url' => null, 'raw' => $raw];
+    }
+
+    /**
+     * Check if a string looks like a valid login URL slug (not an error message).
+     *
+     * A valid slug is short, alphanumeric with hyphens/underscores, and contains
+     * no shell error patterns. This prevents error output like "sudo: wp: command
+     * not found" from being treated as a URL slug.
+     *
+     * @param string $value      The value to check
+     * @param bool   $checkFormat Whether to also validate slug format (default true)
+     * @return bool
+     */
+    protected function isValidLoginSlug(string $value, bool $checkFormat = true): bool
+    {
+        if (empty($value)) {
+            return false;
+        }
+
+        // Reject any output containing error indicators
+        $errorPatterns = [
+            'error', 'Error', 'ERROR',
+            'not found', 'not exist', 'No such',
+            'Could not', 'command not found',
+            'Permission denied', 'sudo:',
+            'Warning:', 'Fatal', 'fatal',
+            'undefined', 'Invalid',
+            'Cannot', 'unable',
+        ];
+
+        foreach ($errorPatterns as $pattern) {
+            if (str_contains($value, $pattern)) {
+                return false;
+            }
+        }
+
+        // If checking format, slug must be a simple path segment (alphanumeric, hyphens, underscores)
+        if ($checkFormat && !preg_match('/^[a-zA-Z0-9\-_]+$/', $value)) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
