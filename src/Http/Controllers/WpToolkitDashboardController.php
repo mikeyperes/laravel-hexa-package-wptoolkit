@@ -39,6 +39,24 @@ class WpToolkitDashboardController extends Controller
     }
 
     /**
+     * AJAX: Get ALL WordPress installs on a server.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function getAllInstalls(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id' => 'required|integer|exists:whm_servers,id',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+        $result = $this->wpToolkit->getAllInstalls($server);
+
+        return response()->json($result);
+    }
+
+    /**
      * AJAX: Get WordPress installs for a cPanel account.
      *
      * @param Request $request
