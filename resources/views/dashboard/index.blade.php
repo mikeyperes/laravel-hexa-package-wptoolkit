@@ -5,6 +5,80 @@
 @section('content')
 <div class="space-y-6">
 
+    {{-- Package Functions Index --}}
+    <div class="bg-gray-900 rounded-xl p-6 text-sm font-mono">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-white font-semibold">WP Toolkit Package Functions</h2>
+            <a href="{{ route('wptoolkit.raw') }}" class="text-blue-400 hover:underline text-xs">Raw Dev View &rarr;</a>
+        </div>
+        <table class="w-full text-left">
+            <thead>
+                <tr class="text-gray-400 border-b border-gray-700">
+                    <th class="py-1.5 px-2">Function</th>
+                    <th class="py-1.5 px-2">Method</th>
+                    <th class="py-1.5 px-2">Route</th>
+                    <th class="py-1.5 px-2">Status</th>
+                </tr>
+            </thead>
+            <tbody class="text-gray-300">
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">Scan all WP installs on server</td>
+                    <td class="py-1.5 px-2 text-blue-400">getAllInstalls()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/get-all-installs</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">Get WP installs for cPanel user</td>
+                    <td class="py-1.5 px-2 text-blue-400">getInstallsForAccount()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/get-installs</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">Get users + credentials + login URL + DB creds</td>
+                    <td class="py-1.5 px-2 text-blue-400">getCredentials()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/get-credentials</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">One-click WP admin login (mu-plugin)</td>
+                    <td class="py-1.5 px-2 text-blue-400">generateWordPressLoginUrl()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/wp-login</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">Reset WP user password</td>
+                    <td class="py-1.5 px-2 text-blue-400">resetWordPressPassword()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/reset-password</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">One-click cPanel login</td>
+                    <td class="py-1.5 px-2 text-blue-400">generateCpanelLoginUrl()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/cpanel-login</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">One-click WHM reseller login</td>
+                    <td class="py-1.5 px-2 text-blue-400">generateWhmResellerLoginUrl()</td>
+                    <td class="py-1.5 px-2 text-green-400">POST /wp-toolkit/whm-reseller-login</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr class="border-b border-gray-800">
+                    <td class="py-1.5 px-2">Detect modified wp-admin URL</td>
+                    <td class="py-1.5 px-2 text-blue-400">getStoredCredentials() &rarr; login_info</td>
+                    <td class="py-1.5 px-2 text-gray-500">via get-credentials</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+                <tr>
+                    <td class="py-1.5 px-2">Stored WP credentials (raw user/pass)</td>
+                    <td class="py-1.5 px-2 text-blue-400">getStoredCredentials() &rarr; credentials</td>
+                    <td class="py-1.5 px-2 text-gray-500">via get-credentials</td>
+                    <td class="py-1.5 px-2 text-green-400">LIVE</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
     {{-- Step 1: Select server and scan --}}
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <h2 class="text-lg font-semibold text-gray-900 mb-4">WordPress Installs</h2>
