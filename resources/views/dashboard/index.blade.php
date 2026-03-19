@@ -66,10 +66,14 @@
                     <label class="block text-xs font-medium text-gray-500 mb-1">Login URL</label>
                     <div id="action-login-url" class="text-sm break-words">-</div>
                 </div>
+                <div id="action-custom-login-row" class="hidden">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Custom Login URL (modified wp-admin)</label>
+                    <div id="action-custom-login-url" class="text-sm break-words font-semibold text-orange-600">-</div>
+                </div>
 
-                {{-- Admin users (loaded after selecting install) --}}
+                {{-- Users (loaded after selecting install) --}}
                 <div>
-                    <label class="block text-xs font-medium text-gray-500 mb-1">Admin Users</label>
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Users</label>
                     <div id="action-admin-users" class="text-sm text-gray-500">
                         <span id="admin-users-loading" class="hidden flex items-center gap-2">
                             <svg class="animate-spin h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -266,6 +270,9 @@ document.addEventListener('DOMContentLoaded', function() {
         loading.classList.remove('hidden');
         list.innerHTML = '';
 
+        // Reset custom login URL
+        document.getElementById('action-custom-login-row').classList.add('hidden');
+
         const serverId = document.getElementById('server-select').value;
 
         fetch('{{ route("wptoolkit.get-credentials") }}', {
@@ -282,39 +289,62 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(r => r.json())
         .then(data => {
             loading.classList.add('hidden');
+
+            // Show custom login URL if detected
+            if (data.custom_login_url) {
+                const customRow = document.getElementById('action-custom-login-row');
+                const customEl = document.getElementById('action-custom-login-url');
+                const fullUrl = (inst.url || '').replace(/\/$/, '') + '/' + data.custom_login_url;
+                customEl.innerHTML = '<a href="' + fullUrl + '" target="_blank" class="text-orange-600 hover:underline">' + fullUrl + ' &#8599;</a>';
+                customRow.classList.remove('hidden');
+            }
+
             if (data.success) {
                 const users = data.admin_users || [];
                 if (users.length === 0) {
-                    list.innerHTML = '<span class="text-gray-400">No admin users found.</span>';
+                    list.innerHTML = '<span class="text-gray-400">No users found.</span>';
                     return;
                 }
 
-                // Auto-select first admin user
-                currentAdminUser = users[0].user_login;
+                // Auto-select first administrator
+                const firstAdmin = users.find(u => u.roles && u.roles.indexOf('administrator') !== -1);
+                currentAdminUser = firstAdmin ? firstAdmin.user_login : users[0].user_login;
 
-                let html = '';
+                let html = '<table class="w-full text-left text-xs">';
+                html += '<thead><tr class="border-b border-gray-200">';
+                html += '<th class="py-1.5 px-2">Username</th>';
+                html += '<th class="py-1.5 px-2">Email</th>';
+                html += '<th class="py-1.5 px-2">Role</th>';
+                html += '<th class="py-1.5 px-2">Registered</th>';
+                html += '</tr></thead><tbody>';
+
                 users.forEach(function(u) {
                     const isSelected = u.user_login === currentAdminUser;
-                    html += '<div class="flex items-center gap-3 py-1.5 px-2 rounded cursor-pointer hover:bg-gray-100 admin-user-row' + (isSelected ? ' bg-blue-50 border border-blue-200' : '') + '" data-wp-user="' + (u.user_login || '') + '">';
-                    html += '<span class="font-medium text-gray-900">' + (u.user_login || '-') + '</span>';
-                    html += '<span class="text-gray-400">' + (u.user_email || '') + '</span>';
-                    html += '</div>';
+                    const roles = u.roles || '-';
+                    const registered = u.user_registered || '-';
+                    const isAdmin = roles.indexOf('administrator') !== -1;
+
+                    html += '<tr class="border-b border-gray-100 cursor-pointer hover:bg-gray-100 admin-user-row' + (isSelected ? ' bg-blue-50' : '') + '" data-wp-user="' + (u.user_login || '') + '">';
+                    html += '<td class="py-1.5 px-2 font-medium text-gray-900">' + (u.user_login || '-') + '</td>';
+                    html += '<td class="py-1.5 px-2 text-gray-500 break-words">' + (u.user_email || '-') + '</td>';
+                    html += '<td class="py-1.5 px-2"><span class="inline-block px-1.5 py-0.5 rounded text-xs ' + (isAdmin ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600') + '">' + roles + '</span></td>';
+                    html += '<td class="py-1.5 px-2 text-gray-400">' + registered + '</td>';
+                    html += '</tr>';
                 });
 
+                html += '</tbody></table>';
                 list.innerHTML = html;
 
-                // Click to select different admin user
+                // Click to select different user
                 list.querySelectorAll('.admin-user-row').forEach(function(row) {
                     row.addEventListener('click', function() {
                         currentAdminUser = this.dataset.wpUser;
-                        list.querySelectorAll('.admin-user-row').forEach(r => {
-                            r.classList.remove('bg-blue-50', 'border', 'border-blue-200');
-                        });
-                        this.classList.add('bg-blue-50', 'border', 'border-blue-200');
+                        list.querySelectorAll('.admin-user-row').forEach(r => r.classList.remove('bg-blue-50'));
+                        this.classList.add('bg-blue-50');
                     });
                 });
             } else {
-                list.innerHTML = '<span class="text-red-500">' + (data.error || 'Failed to load admin users.') + '</span>';
+                list.innerHTML = '<span class="text-red-500">' + (data.error || 'Failed to load users.') + '</span>';
             }
         })
         .catch(err => {

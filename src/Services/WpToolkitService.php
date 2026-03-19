@@ -370,8 +370,10 @@ class WpToolkitService
         $escapedPath = escapeshellarg($wpPath);
         $escapedUser = escapeshellarg($username);
 
+        $userFields = 'ID,user_login,user_email,display_name,roles,user_registered';
+
         // Method 1: wp-toolkit --wp-cli (uses install ID)
-        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=ID,user_login,user_email,display_name --format=json 2>&1";
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user list --fields={$userFields} --format=json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Trying wp-toolkit --wp-cli', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
@@ -380,7 +382,7 @@ class WpToolkitService
 
         // Method 2: Direct wp-cli as cPanel user (fallback)
         if ($adminUsers === null) {
-            $cmd = "sudo -u {$escapedUser} wp user list --role=administrator --fields=ID,user_login,user_email,display_name --format=json --path={$escapedPath} 2>&1";
+            $cmd = "sudo -u {$escapedUser} wp user list --fields={$userFields} --format=json --path={$escapedPath} 2>&1";
 
             $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
             $fallbackOutput = trim($connection->exec($cmd));
@@ -407,6 +409,10 @@ class WpToolkitService
             $adminUsers = $this->parseWpCliUserList($dbOutput);
         }
 
+        // Detect custom login URL (WPS Hide Login, iThemes Security, etc.)
+        $customLoginUrl = $this->detectCustomLoginUrl($connection, $installId, $wpPath, $username);
+        $output .= "\n---LOGIN_URL---\n" . ($customLoginUrl['raw'] ?? '');
+
         $connection->disconnect();
 
         if ($adminUsers === null) {
@@ -427,10 +433,11 @@ class WpToolkitService
         ]);
 
         return [
-            'success'     => true,
-            'admin_users' => $adminUsers,
-            'login_url'   => $loginUrl,
-            'raw_output'  => $output,
+            'success'          => true,
+            'admin_users'      => $adminUsers,
+            'login_url'        => $loginUrl,
+            'custom_login_url' => $customLoginUrl['url'] ?? null,
+            'raw_output'       => $output,
         ];
     }
 
@@ -480,10 +487,12 @@ class WpToolkitService
         $users = [];
         foreach ($decoded as $user) {
             $users[] = [
-                'id'           => $user['ID'] ?? $user['id'] ?? null,
-                'user_login'   => $user['user_login'] ?? null,
-                'user_email'   => $user['user_email'] ?? null,
-                'display_name' => $user['display_name'] ?? null,
+                'id'              => $user['ID'] ?? $user['id'] ?? null,
+                'user_login'      => $user['user_login'] ?? null,
+                'user_email'      => $user['user_email'] ?? null,
+                'display_name'    => $user['display_name'] ?? null,
+                'roles'           => $user['roles'] ?? null,
+                'user_registered' => $user['user_registered'] ?? null,
             ];
         }
 
@@ -702,6 +711,74 @@ PHP;
         ]);
 
         return $this->whm->createWhmSession($server, $username);
+    }
+
+    /**
+     * Detect if a WordPress install has a custom login URL.
+     *
+     * Checks for common plugins that modify the wp-admin URL:
+     * - WPS Hide Login (whl_page option)
+     * - iThemes Security (itsec-storage → hide-backend)
+     * - All In One WP Security (aio_wp_security_configs → rename-login-page)
+     *
+     * @param SSH2   $connection Active SSH connection
+     * @param int    $installId  WP Toolkit install ID
+     * @param string $wpPath     Full path to WordPress install
+     * @param string $username   cPanel username
+     * @return array{url: string|null, raw: string}
+     */
+    protected function detectCustomLoginUrl(SSH2 $connection, int $installId, string $wpPath, string $username): array
+    {
+        $escapedId = escapeshellarg((string) $installId);
+        $escapedPath = escapeshellarg($wpPath);
+        $escapedUser = escapeshellarg($username);
+        $raw = '';
+
+        // Check WPS Hide Login (most common)
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- option get whl_page 2>&1";
+        $output = trim($connection->exec($cmd));
+        $raw .= "whl_page: {$output}\n";
+
+        if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not exist') && !str_contains($output, 'Could not')) {
+            return ['url' => $output, 'raw' => $raw];
+        }
+
+        // Fallback: direct wp-cli
+        $cmd = "sudo -u {$escapedUser} wp option get whl_page --path={$escapedPath} 2>&1";
+        $output = trim($connection->exec($cmd));
+        $raw .= "whl_page (direct): {$output}\n";
+
+        if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not exist') && !str_contains($output, 'Could not')) {
+            return ['url' => $output, 'raw' => $raw];
+        }
+
+        // Check iThemes Security
+        $cmd = "sudo -u {$escapedUser} wp option get itsec-storage --format=json --path={$escapedPath} 2>&1";
+        $itsecOutput = trim($connection->exec($cmd));
+        $raw .= "itsec-storage: " . mb_substr($itsecOutput, 0, 300) . "\n";
+
+        if ($itsecOutput && !str_contains($itsecOutput, 'Error')) {
+            $itsec = json_decode($itsecOutput, true);
+            $hideBackend = $itsec['hide-backend']['slug'] ?? null;
+            if ($hideBackend) {
+                return ['url' => $hideBackend, 'raw' => $raw];
+            }
+        }
+
+        // Check All In One WP Security
+        $cmd = "sudo -u {$escapedUser} wp option get aio_wp_security_configs --format=json --path={$escapedPath} 2>&1";
+        $aioOutput = trim($connection->exec($cmd));
+        $raw .= "aio_wp_security: " . mb_substr($aioOutput, 0, 300) . "\n";
+
+        if ($aioOutput && !str_contains($aioOutput, 'Error')) {
+            $aio = json_decode($aioOutput, true);
+            $renamePage = $aio['aiowps_login_page_slug'] ?? null;
+            if ($renamePage) {
+                return ['url' => $renamePage, 'raw' => $raw];
+            }
+        }
+
+        return ['url' => null, 'raw' => $raw];
     }
 
     /**
