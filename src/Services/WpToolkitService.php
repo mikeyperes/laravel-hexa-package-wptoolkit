@@ -413,6 +413,10 @@ class WpToolkitService
         $customLoginUrl = $this->detectCustomLoginUrl($connection, $installId, $wpPath, $username);
         $output .= "\n---LOGIN_URL---\n" . ($customLoginUrl['raw'] ?? '');
 
+        // Get stored credentials from WP Toolkit (raw username + password)
+        $storedCreds = $this->getStoredCredentials($connection, $installId, $wpPath, $username);
+        $output .= "\n---STORED_CREDS---\n" . ($storedCreds['raw'] ?? '');
+
         $connection->disconnect();
 
         if ($adminUsers === null) {
@@ -433,11 +437,13 @@ class WpToolkitService
         ]);
 
         return [
-            'success'          => true,
-            'admin_users'      => $adminUsers,
-            'login_url'        => $loginUrl,
-            'custom_login_url' => $customLoginUrl['url'] ?? null,
-            'raw_output'       => $output,
+            'success'            => true,
+            'admin_users'        => $adminUsers,
+            'login_url'          => $loginUrl,
+            'custom_login_url'   => $customLoginUrl['url'] ?? null,
+            'stored_credentials' => $storedCreds['credentials'] ?? null,
+            'db_credentials'     => $storedCreds['db'] ?? null,
+            'raw_output'         => $output,
         ];
     }
 
@@ -711,6 +717,88 @@ PHP;
         ]);
 
         return $this->whm->createWhmSession($server, $username);
+    }
+
+    /**
+     * Get stored credentials from WP Toolkit for a WordPress install.
+     *
+     * WP Toolkit stores the raw admin username and password when it creates
+     * the install. This retrieves them via `wp-toolkit --info`.
+     * Also reads DB credentials from wp-config.php.
+     *
+     * @param SSH2   $connection Active SSH connection
+     * @param int    $installId  WP Toolkit install ID
+     * @param string $wpPath     Full path to WordPress install
+     * @param string $username   cPanel username
+     * @return array{credentials: array|null, db: array|null, raw: string}
+     */
+    protected function getStoredCredentials(SSH2 $connection, int $installId, string $wpPath, string $username): array
+    {
+        $escapedId = escapeshellarg((string) $installId);
+        $escapedPath = escapeshellarg($wpPath);
+        $escapedUser = escapeshellarg($username);
+        $raw = '';
+        $credentials = null;
+        $dbCreds = null;
+
+        // Method 1: wp-toolkit --info (stored admin credentials)
+        $cmd = "wp-toolkit --info -instance-id {$escapedId} -format json 2>&1";
+        $output = trim($connection->exec($cmd));
+        $raw .= "wp-toolkit --info: " . mb_substr($output, 0, 1000) . "\n";
+
+        if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not found')) {
+            // Find JSON in output
+            $jsonStart = null;
+            for ($i = 0; $i < strlen($output); $i++) {
+                if ($output[$i] === '{' || $output[$i] === '[') {
+                    $jsonStart = $i;
+                    break;
+                }
+            }
+
+            if ($jsonStart !== null) {
+                $decoded = json_decode(substr($output, $jsonStart), true);
+                if ($decoded) {
+                    // Normalize: might be wrapped in array
+                    $info = isset($decoded[0]) ? $decoded[0] : $decoded;
+
+                    $adminLogin = $info['adminLogin'] ?? $info['admin_login'] ?? $info['adminUser'] ?? $info['admin_user'] ?? null;
+                    $adminPass = $info['adminPassword'] ?? $info['admin_password'] ?? $info['adminPass'] ?? $info['admin_pass'] ?? null;
+                    $adminEmail = $info['adminEmail'] ?? $info['admin_email'] ?? null;
+
+                    if ($adminLogin) {
+                        $credentials = [
+                            'username' => $adminLogin,
+                            'password' => $adminPass,
+                            'email'    => $adminEmail,
+                        ];
+                    }
+                }
+            }
+        }
+
+        // Method 2: Read DB credentials from wp-config.php
+        $cmd = "sudo -u {$escapedUser} grep -E \"^define\\(\\s*'(DB_NAME|DB_USER|DB_PASSWORD|DB_HOST)'\" {$escapedPath}/wp-config.php 2>&1";
+        $dbOutput = trim($connection->exec($cmd));
+        $raw .= "wp-config.php DB: " . $dbOutput . "\n";
+
+        if ($dbOutput && !str_contains($dbOutput, 'No such file')) {
+            $dbCreds = [];
+            foreach (explode("\n", $dbOutput) as $line) {
+                if (preg_match("/define\(\s*'(DB_NAME|DB_USER|DB_PASSWORD|DB_HOST)'\s*,\s*'([^']*)'\s*\)/", $line, $m)) {
+                    $dbCreds[strtolower($m[1])] = $m[2];
+                }
+            }
+            if (empty($dbCreds)) {
+                $dbCreds = null;
+            }
+        }
+
+        return [
+            'credentials' => $credentials,
+            'db'          => $dbCreds,
+            'raw'         => $raw,
+        ];
     }
 
     /**
