@@ -71,6 +71,48 @@
                     <div id="action-custom-login-url" class="text-sm break-words font-semibold text-orange-600">-</div>
                 </div>
 
+                {{-- Stored WP Credentials --}}
+                <div id="stored-creds-row" class="hidden">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Stored WP Credentials (from WP Toolkit)</label>
+                    <div id="stored-creds" class="bg-gray-900 rounded-lg p-3 space-y-1">
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs w-16">User:</span>
+                            <span id="stored-username" class="text-green-400 font-mono text-sm"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs w-16">Pass:</span>
+                            <span id="stored-password" class="text-green-400 font-mono text-sm"></span>
+                            <button id="btn-copy-stored-pass" class="text-gray-400 hover:text-white text-xs px-2 py-0.5 border border-gray-600 rounded">Copy</button>
+                            <span id="stored-copy-confirm" class="hidden text-green-400 text-xs">Copied</span>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- DB Credentials --}}
+                <div id="db-creds-row" class="hidden">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Database Credentials</label>
+                    <div id="db-creds" class="bg-gray-900 rounded-lg p-3 space-y-1">
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs w-16">Host:</span>
+                            <span id="db-host" class="text-blue-400 font-mono text-sm"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs w-16">DB:</span>
+                            <span id="db-name" class="text-blue-400 font-mono text-sm"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs w-16">User:</span>
+                            <span id="db-user" class="text-blue-400 font-mono text-sm"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 text-xs w-16">Pass:</span>
+                            <span id="db-password" class="text-blue-400 font-mono text-sm"></span>
+                            <button id="btn-copy-db-pass" class="text-gray-400 hover:text-white text-xs px-2 py-0.5 border border-gray-600 rounded">Copy</button>
+                            <span id="db-copy-confirm" class="hidden text-green-400 text-xs">Copied</span>
+                        </div>
+                    </div>
+                </div>
+
                 {{-- Users (loaded after selecting install) --}}
                 <div>
                     <label class="block text-xs font-medium text-gray-500 mb-1">Users</label>
@@ -270,8 +312,10 @@ document.addEventListener('DOMContentLoaded', function() {
         loading.classList.remove('hidden');
         list.innerHTML = '';
 
-        // Reset custom login URL
+        // Reset custom login URL and creds
         document.getElementById('action-custom-login-row').classList.add('hidden');
+        document.getElementById('stored-creds-row').classList.add('hidden');
+        document.getElementById('db-creds-row').classList.add('hidden');
 
         const serverId = document.getElementById('server-select').value;
 
@@ -297,6 +341,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 const fullUrl = (inst.url || '').replace(/\/$/, '') + '/' + data.custom_login_url;
                 customEl.innerHTML = '<a href="' + fullUrl + '" target="_blank" class="text-orange-600 hover:underline">' + fullUrl + ' &#8599;</a>';
                 customRow.classList.remove('hidden');
+            }
+
+            // Show stored WP credentials if available
+            if (data.stored_credentials && data.stored_credentials.username) {
+                document.getElementById('stored-username').textContent = data.stored_credentials.username;
+                document.getElementById('stored-password').textContent = data.stored_credentials.password || '(not stored)';
+                document.getElementById('stored-creds-row').classList.remove('hidden');
+            }
+
+            // Show DB credentials if available
+            if (data.db_credentials) {
+                document.getElementById('db-host').textContent = data.db_credentials.db_host || '-';
+                document.getElementById('db-name').textContent = data.db_credentials.db_name || '-';
+                document.getElementById('db-user').textContent = data.db_credentials.db_user || '-';
+                document.getElementById('db-password').textContent = data.db_credentials.db_password || '-';
+                document.getElementById('db-creds-row').classList.remove('hidden');
             }
 
             if (data.success) {
@@ -484,16 +544,28 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // --- Copy password ---
+    // --- Copy buttons ---
     document.getElementById('btn-copy-pass').addEventListener('click', function() {
-        const pass = document.getElementById('password-value').textContent;
-        if (pass) {
-            navigator.clipboard.writeText(pass);
-            const confirm = document.getElementById('copy-confirm');
-            confirm.classList.remove('hidden');
-            setTimeout(() => confirm.classList.add('hidden'), 2000);
-        }
+        copyAndConfirm('password-value', 'copy-confirm');
     });
+
+    document.getElementById('btn-copy-stored-pass').addEventListener('click', function() {
+        copyAndConfirm('stored-password', 'stored-copy-confirm');
+    });
+
+    document.getElementById('btn-copy-db-pass').addEventListener('click', function() {
+        copyAndConfirm('db-password', 'db-copy-confirm');
+    });
+
+    function copyAndConfirm(valueId, confirmId) {
+        const val = document.getElementById(valueId).textContent;
+        if (val) {
+            navigator.clipboard.writeText(val);
+            const el = document.getElementById(confirmId);
+            el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 2000);
+        }
+    }
 
     // --- Banner helper ---
     function showBanner(id, type, message) {
