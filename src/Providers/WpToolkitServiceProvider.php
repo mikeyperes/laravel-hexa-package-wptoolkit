@@ -39,27 +39,15 @@ class WpToolkitServiceProvider extends ServiceProvider
             __DIR__ . '/../../config/wptoolkit.php' => config_path('wptoolkit.php'),
         ], 'wptoolkit-config');
 
-        // Inject sidebar menu items into core layout
+        // Inject sidebar into sandbox stack
         View::composer('layouts.app', function ($view) {
-            $sidebarMenu = '';
-            $sidebarSettings = '';
-
+            $factory = $view->getFactory();
             if (auth()->check()) {
                 try {
-                    $sidebarMenu = view('wptoolkit::partials.sidebar-menu')->render();
-                } catch (\Throwable $e) {
-                    $sidebarMenu = '';
-                }
-                try {
-                    $sidebarSettings = view('wptoolkit::partials.sidebar-settings')->render();
-                } catch (\Throwable $e) {
-                    $sidebarSettings = '';
-                }
+                    $factory->startPush('sidebar-sandbox',
+                        view('wptoolkit::partials.sidebar-menu')->render());
+                } catch (\Throwable $e) {}
             }
-
-            $existing = $view->getData();
-            $view->with('wptoolkitSidebarMenu', ($existing['wptoolkitSidebarMenu'] ?? '') . $sidebarMenu);
-            $view->with('wptoolkitSidebarSettings', ($existing['wptoolkitSidebarSettings'] ?? '') . $sidebarSettings);
         });
     }
 }
