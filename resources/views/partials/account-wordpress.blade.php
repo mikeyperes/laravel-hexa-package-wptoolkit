@@ -97,6 +97,12 @@
          * @return {string}
          */
         wpBestLoginUser(wp) {
+            // Check admin_users for one marked as default login
+            var users = this.wpCredentials[wp.path]?.admin_users || [];
+            for (var i = 0; i < users.length; i++) {
+                if (users[i].is_default_login) return users[i].user_login || users[i].username;
+            }
+            // Fall back to scan data or stored credentials
             if (this.wpCredentials[wp.path]?.stored_credentials?.username) {
                 return this.wpCredentials[wp.path].stored_credentials.username;
             }
@@ -277,19 +283,11 @@
                                     </span>
                                 </template>
 
-                                {{-- Green badge: credentials loaded with stored password --}}
-                                <template x-if="wpCredentials[wp.path]?.stored_credentials?.password">
+                                {{-- Green badge: credentials loaded successfully --}}
+                                <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error">
                                     <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                        Password available
-                                    </span>
-                                </template>
-
-                                {{-- Yellow badge: credentials loaded but no stored password --}}
-                                <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error && !wpCredentials[wp.path]?.stored_credentials?.password">
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700 border border-yellow-200">
-                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                                        Users found (use Set Password)
+                                        <span x-text="(wpCredentials[wp.path].admin_users || []).length + ' users'"></span>
                                     </span>
                                 </template>
 
@@ -376,7 +374,7 @@
                                                     <td class="px-3 py-2">
                                                         <div class="flex items-center gap-1.5">
                                                             <span class="font-mono text-gray-900 break-words" x-text="user.username || user.user_login"></span>
-                                                            <template x-if="wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login)">
+                                                            <template x-if="user.is_default_login">
                                                                 <span class="inline-block px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded">DEFAULT</span>
                                                             </template>
                                                         </div>
@@ -386,14 +384,13 @@
                                                     {{-- Role --}}
                                                     <td class="px-3 py-2 text-gray-600" x-text="user.role || user.roles || '-'"></td>
 
-                                                    {{-- Password (masked with eye toggle, or "use Set Password" for non-stored users) --}}
+                                                    {{-- Password (masked with eye toggle) --}}
                                                     <td class="px-3 py-2">
-                                                        {{-- Has stored password for this user --}}
-                                                        <template x-if="wpCredentials[wp.path]?.stored_credentials?.password && (wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login))">
+                                                        <template x-if="user.stored_password">
                                                             <div class="flex items-center gap-1.5">
                                                                 <span class="font-mono text-gray-700 break-words"
                                                                     x-text="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)]
-                                                                        ? wpCredentials[wp.path].stored_credentials.password
+                                                                        ? user.stored_password
                                                                         : String.fromCharCode(8226).repeat(8)"></span>
                                                                 <button @click="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)] = !wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)]"
                                                                     class="text-gray-400 hover:text-gray-600 shrink-0" title="Toggle password visibility">
@@ -402,9 +399,8 @@
                                                                 </button>
                                                             </div>
                                                         </template>
-                                                        {{-- No stored password for this user — WordPress hashes passwords, only Set Password can create a known one --}}
-                                                        <template x-if="!wpCredentials[wp.path]?.stored_credentials?.password || (wpCredentials[wp.path]?.stored_credentials?.username !== (user.username || user.user_login))">
-                                                            <span class="text-gray-400 italic text-xs">Use Set Password</span>
+                                                        <template x-if="!user.stored_password">
+                                                            <span class="text-gray-400 text-xs">-</span>
                                                         </template>
                                                     </td>
 

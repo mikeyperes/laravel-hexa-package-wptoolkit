@@ -429,9 +429,33 @@ class WpToolkitService
             ];
         }
 
+        // Merge stored password into admin_users array so the view doesn't need fragile username matching
+        $storedCredentials = $storedCreds['credentials'] ?? null;
+        if ($storedCredentials && $storedCredentials['username'] && $adminUsers) {
+            $storedUsername = $storedCredentials['username'];
+            $matched = false;
+            foreach ($adminUsers as &$u) {
+                $uLogin = $u['user_login'] ?? $u['username'] ?? null;
+                if ($uLogin && strtolower($uLogin) === strtolower($storedUsername)) {
+                    $u['stored_password'] = $storedCredentials['password'] ?? null;
+                    $u['is_default_login'] = true;
+                    $matched = true;
+                }
+            }
+            unset($u);
+
+            // If stored username wasn't found in user list, attach to first admin user as fallback
+            if (!$matched && !empty($adminUsers)) {
+                $adminUsers[0]['stored_password'] = $storedCredentials['password'] ?? null;
+                $adminUsers[0]['stored_login_username'] = $storedUsername;
+                $adminUsers[0]['is_default_login'] = true;
+            }
+        }
+
         $this->generic->log('info', '[WpToolkit] getCredentials complete', [
-            'install_id'  => $installId,
-            'admin_count' => count($adminUsers),
+            'install_id'         => $installId,
+            'admin_count'        => count($adminUsers),
+            'stored_credentials' => $storedCredentials ? ['username' => $storedCredentials['username'], 'has_password' => !empty($storedCredentials['password'])] : null,
         ]);
 
         return [
@@ -439,7 +463,7 @@ class WpToolkitService
             'admin_users'        => $adminUsers,
             'login_url'          => $loginUrl,
             'login_info'         => $storedCreds['login_info'] ?? null,
-            'stored_credentials' => $storedCreds['credentials'] ?? null,
+            'stored_credentials' => $storedCredentials,
             'db_credentials'     => $storedCreds['db'] ?? null,
             'raw_output'         => $output,
         ];
