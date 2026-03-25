@@ -188,6 +188,39 @@
         },
 
         /**
+         * Copy text to clipboard and show brief "Copied" feedback on the button
+         * @param {string} text  The text to copy
+         * @param {HTMLElement} btn  The button element for feedback
+         */
+        wpCopyText(text, btn) {
+            navigator.clipboard.writeText(text);
+            if (btn) {
+                var orig = btn.innerText;
+                btn.innerText = 'Copied!';
+                btn.classList.add('bg-green-100', 'text-green-700', 'border-green-300');
+                setTimeout(() => { btn.innerText = orig; btn.classList.remove('bg-green-100', 'text-green-700', 'border-green-300'); }, 1500);
+            }
+        },
+
+        /**
+         * Copy formatted login info to clipboard
+         * @param {Object} wp    The WordPress install object
+         * @param {Object} user  The WordPress user object
+         * @param {HTMLElement} btn  The button element for feedback
+         */
+        wpCopyLoginInfo(wp, user, btn) {
+            var loginUrl = wp.login_url || (wp.url + '/wp-login.php');
+            var info = 'Login URL: ' + loginUrl + '\nUsername: ' + (user.username || user.user_login) + '\nPassword: ' + (user.stored_password || 'N/A');
+            navigator.clipboard.writeText(info);
+            if (btn) {
+                var orig = btn.innerText;
+                btn.innerText = 'Copied!';
+                btn.classList.add('bg-green-100', 'text-green-700', 'border-green-300');
+                setTimeout(() => { btn.innerText = orig; btn.classList.remove('bg-green-100', 'text-green-700', 'border-green-300'); }, 1500);
+            }
+        },
+
+        /**
          * Format a date string relative to user's timezone
          * @param {string} dateStr The date string (e.g. '2024-01-15 03:22:00')
          * @return {string}
@@ -395,17 +428,35 @@
                                                     {{-- Registered Date (in user's timezone) --}}
                                                     <td class="px-3 py-2 text-gray-500 whitespace-nowrap" x-text="wpFormatDate(user.user_registered)"></td>
 
-                                                    {{-- Actions: Set Password + Auto Login --}}
+                                                    {{-- Actions --}}
                                                     <td class="px-3 py-2">
-                                                        <div class="flex items-center gap-1.5">
+                                                        <div class="flex items-center gap-1.5 flex-wrap">
+                                                            {{-- Copy Password (only when password available) --}}
+                                                            <template x-if="user.stored_password">
+                                                                <button @click="wpCopyText(user.stored_password, $event.currentTarget)"
+                                                                    class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 rounded hover:bg-blue-100 border border-blue-200">
+                                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                                    Copy PW
+                                                                </button>
+                                                            </template>
+
+                                                            {{-- Copy Login Info (only when password available) --}}
+                                                            <template x-if="user.stored_password">
+                                                                <button @click="wpCopyLoginInfo(wp, user, $event.currentTarget)"
+                                                                    class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-purple-600 bg-purple-50 rounded hover:bg-purple-100 border border-purple-200">
+                                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                                    Copy Login
+                                                                </button>
+                                                            </template>
+
                                                             {{-- Set Password --}}
                                                             <button @click="wpOpenReset(wp, user)"
                                                                 class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-orange-600 bg-orange-50 rounded hover:bg-orange-100 border border-orange-200">
                                                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                                                                Set Password
+                                                                Set PW
                                                             </button>
 
-                                                            {{-- Auto Login per user (per-user spinner key) --}}
+                                                            {{-- Auto Login per user --}}
                                                             <button @click="wpAutoLogin(wp, user.username || user.user_login)" :disabled="wpIsLogging(wp, user.username || user.user_login)"
                                                                 class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-600 bg-green-50 rounded hover:bg-green-100 border border-green-200 disabled:opacity-50">
                                                                 <svg x-show="!wpIsLogging(wp, user.username || user.user_login)" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
