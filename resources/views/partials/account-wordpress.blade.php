@@ -26,6 +26,7 @@
         wpResetForm: null,
         wpResetResult: null,
         wpScanError: null,
+        wpUserFilter: '',
 
         /**
          * Scan for WordPress installations on this account
@@ -74,19 +75,42 @@
          * @param {string} wpUser  The WordPress username to log in as
          */
         wpAutoLogin(wp, wpUser) {
-            this.wpAutoLogging[wp.path] = true;
+            var key = wp.path + '::' + wpUser;
+            this.wpAutoLogging[key] = true;
             fetch('{{ route('wptoolkit.wp-login') }}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
                 body: JSON.stringify({ server_id: {{ $server->id }}, wp_path: wp.path, username: '{{ $account->username }}', wp_user: wpUser, site_url: wp.url })
             }).then(r => r.json()).then(d => {
-                this.wpAutoLogging[wp.path] = false;
+                this.wpAutoLogging[key] = false;
                 if (d.url) window.open(d.url, '_blank');
-                else alert('Auto-login failed: no URL returned');
+                else alert('Auto-login failed: ' + (d.error || 'no URL returned'));
             }).catch(e => {
-                this.wpAutoLogging[wp.path] = false;
+                this.wpAutoLogging[key] = false;
                 alert('Auto-login failed: ' + (e.message || 'Unknown error'));
             });
+        },
+
+        /**
+         * Get the best username for auto-login (stored credentials > admin_user > 'admin')
+         * @param {Object} wp The WordPress install object
+         * @return {string}
+         */
+        wpBestLoginUser(wp) {
+            if (this.wpCredentials[wp.path]?.stored_credentials?.username) {
+                return this.wpCredentials[wp.path].stored_credentials.username;
+            }
+            return wp.admin_user || 'admin';
+        },
+
+        /**
+         * Check if a specific user's auto-login is in progress
+         * @param {Object} wp     The WordPress install object
+         * @param {string} wpUser The WordPress username
+         * @return {boolean}
+         */
+        wpIsLogging(wp, wpUser) {
+            return this.wpAutoLogging[wp.path + '::' + wpUser] === true;
         },
 
         /**
@@ -99,6 +123,7 @@
                 path: wp.path,
                 installId: wp.id,
                 wpPath: wp.path,
+                wpUrl: wp.url,
                 username: user.username || user.user_login || 'admin',
                 email: user.email || user.user_email || '',
                 password: '',
@@ -140,6 +165,33 @@
                 this.wpResetForm.saving = false;
                 this.wpResetResult = { success: false, message: 'Request failed: ' + (e.message || 'Unknown error') };
             });
+        },
+
+        /**
+         * Check if a WP user row matches the current filter
+         * @param {Object} user The WordPress user object
+         * @return {boolean}
+         */
+        wpUserMatches(user) {
+            if (!this.wpUserFilter) return true;
+            var q = this.wpUserFilter.toLowerCase();
+            var uname = (user.username || user.user_login || '').toLowerCase();
+            var email = (user.email || user.user_email || '').toLowerCase();
+            var display = (user.display_name || '').toLowerCase();
+            return uname.includes(q) || email.includes(q) || display.includes(q);
+        },
+
+        /**
+         * Format a date string relative to user's timezone
+         * @param {string} dateStr The date string (e.g. '2024-01-15 03:22:00')
+         * @return {string}
+         */
+        wpFormatDate(dateStr) {
+            if (!dateStr) return '-';
+            try {
+                var d = new Date(dateStr + (dateStr.includes('T') ? '' : 'Z'));
+                return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            } catch(e) { return dateStr; }
         }
      }">
 
@@ -153,6 +205,66 @@
             </template>
         </h2>
         <div class="flex items-center gap-3">
+            {{-- cPanel Login --}}
+            @if(Route::has('wptoolkit.cpanel-login'))
+            <button @click.stop="
+                var btn = $event.currentTarget;
+                btn.disabled = true;
+                btn.querySelector('.cp-icon').classList.add('hidden');
+                btn.querySelector('.cp-spin').classList.remove('hidden');
+                fetch('{{ route('wptoolkit.cpanel-login') }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
+                    body: JSON.stringify({ server_id: {{ $server->id }}, username: '{{ $account->username }}' })
+                }).then(r => r.json()).then(d => {
+                    btn.disabled = false;
+                    btn.querySelector('.cp-icon').classList.remove('hidden');
+                    btn.querySelector('.cp-spin').classList.add('hidden');
+                    if (d.url) window.open(d.url, '_blank');
+                    else alert('cPanel login failed: ' + (d.error || 'no URL'));
+                }).catch(e => {
+                    btn.disabled = false;
+                    btn.querySelector('.cp-icon').classList.remove('hidden');
+                    btn.querySelector('.cp-spin').classList.add('hidden');
+                    alert('cPanel login failed: ' + e.message);
+                });
+            " class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100 border border-orange-200 disabled:opacity-50" title="Open cPanel">
+                <svg class="w-3.5 h-3.5 cp-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                <svg class="w-3.5 h-3.5 cp-spin hidden animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                cPanel
+            </button>
+            @endif
+
+            {{-- WHM Reseller Login --}}
+            @if(Route::has('wptoolkit.whm-reseller-login'))
+            <button @click.stop="
+                var btn = $event.currentTarget;
+                btn.disabled = true;
+                btn.querySelector('.whm-icon').classList.add('hidden');
+                btn.querySelector('.whm-spin').classList.remove('hidden');
+                fetch('{{ route('wptoolkit.whm-reseller-login') }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
+                    body: JSON.stringify({ server_id: {{ $server->id }}, username: '{{ $account->username }}' })
+                }).then(r => r.json()).then(d => {
+                    btn.disabled = false;
+                    btn.querySelector('.whm-icon').classList.remove('hidden');
+                    btn.querySelector('.whm-spin').classList.add('hidden');
+                    if (d.url) window.open(d.url, '_blank');
+                    else alert('WHM login failed: ' + (d.error || 'no URL'));
+                }).catch(e => {
+                    btn.disabled = false;
+                    btn.querySelector('.whm-icon').classList.remove('hidden');
+                    btn.querySelector('.whm-spin').classList.add('hidden');
+                    alert('WHM login failed: ' + e.message);
+                });
+            " class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 border border-red-200 disabled:opacity-50" title="Open WHM Reseller">
+                <svg class="w-3.5 h-3.5 whm-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                <svg class="w-3.5 h-3.5 whm-spin hidden animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                WHM
+            </button>
+            @endif
+
             {{-- Scan button (stop propagation so it doesn't toggle collapse) --}}
             <button @click.stop="wpScan()" :disabled="wpLoading"
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 border border-blue-200 disabled:opacity-50">
@@ -276,14 +388,23 @@
                                     <span x-text="wpCredLoading[wp.path] ? 'Loading...' : 'Show Credentials'"></span>
                                 </button>
 
-                                {{-- Auto Login --}}
-                                <button @click="wpAutoLogin(wp, wp.admin_user || 'admin')" :disabled="wpAutoLogging[wp.path] === true"
+                                {{-- Auto Login (uses best known username) --}}
+                                <button @click="wpAutoLogin(wp, wpBestLoginUser(wp))" :disabled="wpIsLogging(wp, wpBestLoginUser(wp))"
                                     class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 border border-green-200 disabled:opacity-50">
-                                    <svg x-show="!wpAutoLogging[wp.path]" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
-                                    <svg x-show="wpAutoLogging[wp.path]" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                    <span x-text="wpAutoLogging[wp.path] ? 'Logging in...' : 'Auto Login'"></span>
+                                    <svg x-show="!wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+                                    <svg x-show="wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                    <span x-text="wpIsLogging(wp, wpBestLoginUser(wp)) ? 'Logging in...' : 'Auto Login'"></span>
                                 </button>
                             </div>
+
+                            {{-- User Filter (shown only when credentials are loaded and there are users) --}}
+                            <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error && ((wpCredentials[wp.path].admin_users && wpCredentials[wp.path].admin_users.length > 1) || (wpCredentials[wp.path].credentials && wpCredentials[wp.path].credentials.users && wpCredentials[wp.path].credentials.users.length > 1))">
+                                <div class="mb-3">
+                                    <input type="text" x-model="wpUserFilter" autocomplete="off" data-1p-ignore
+                                        placeholder="Filter users by username or email..."
+                                        class="w-full px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:border-blue-400 focus:ring-1 focus:ring-blue-400 placeholder-gray-400">
+                                </div>
+                            </template>
 
                             {{-- Credentials Table (shown after fetch, displays users with password, role, actions) --}}
                             <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error && ((wpCredentials[wp.path].admin_users && wpCredentials[wp.path].admin_users.length > 0) || (wpCredentials[wp.path].credentials && wpCredentials[wp.path].credentials.users && wpCredentials[wp.path].credentials.users.length > 0))">
@@ -292,25 +413,25 @@
                                         <thead class="bg-gray-50">
                                             <tr>
                                                 <th class="text-left px-3 py-2 text-gray-500 font-medium">Username</th>
-                                                <th class="text-left px-3 py-2 text-gray-500 font-medium">Email</th>
                                                 <th class="text-left px-3 py-2 text-gray-500 font-medium">Role</th>
                                                 <th class="text-left px-3 py-2 text-gray-500 font-medium">Password</th>
+                                                <th class="text-left px-3 py-2 text-gray-500 font-medium">Registered</th>
                                                 <th class="text-left px-3 py-2 text-gray-500 font-medium">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <template x-for="(user, uIdx) in (wpCredentials[wp.path].admin_users || wpCredentials[wp.path].credentials?.users || [])" :key="user.username || user.user_login || uIdx">
-                                                <tr class="border-t border-gray-100">
-                                                    {{-- Username + default marker --}}
-                                                    <td class="px-3 py-2 font-mono text-gray-900 break-words">
-                                                        <span x-text="user.username || user.user_login"></span>
-                                                        <template x-if="wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login)">
-                                                            <span class="ml-1 inline-block px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded">DEFAULT</span>
-                                                        </template>
+                                                <tr class="border-t border-gray-100" x-show="wpUserMatches(user)">
+                                                    {{-- Username + Email below + default marker --}}
+                                                    <td class="px-3 py-2">
+                                                        <div class="flex items-center gap-1.5">
+                                                            <span class="font-mono text-gray-900 break-words" x-text="user.username || user.user_login"></span>
+                                                            <template x-if="wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login)">
+                                                                <span class="inline-block px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded">DEFAULT</span>
+                                                            </template>
+                                                        </div>
+                                                        <div class="text-gray-400 break-words mt-0.5" x-text="user.email || user.user_email || '-'"></div>
                                                     </td>
-
-                                                    {{-- Email --}}
-                                                    <td class="px-3 py-2 text-gray-600 break-words" x-text="user.email || user.user_email || '-'"></td>
 
                                                     {{-- Role --}}
                                                     <td class="px-3 py-2 text-gray-600" x-text="user.role || user.roles || '-'"></td>
@@ -322,7 +443,7 @@
                                                                 x-text="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)]
                                                                     ? (wpCredentials[wp.path]?.stored_credentials?.password && (wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login))
                                                                         ? wpCredentials[wp.path].stored_credentials.password
-                                                                        : (user.password || '(no plaintext available — use Set Password)'))
+                                                                        : (user.password || '(no plaintext available)'))
                                                                     : String.fromCharCode(8226).repeat(8)"></span>
                                                             <button @click="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)] = !wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)]"
                                                                 class="text-gray-400 hover:text-gray-600 shrink-0" title="Toggle password visibility">
@@ -334,6 +455,9 @@
                                                         </div>
                                                     </td>
 
+                                                    {{-- Registered Date (in user's timezone) --}}
+                                                    <td class="px-3 py-2 text-gray-500 whitespace-nowrap" x-text="wpFormatDate(user.user_registered)"></td>
+
                                                     {{-- Actions: Set Password + Auto Login --}}
                                                     <td class="px-3 py-2">
                                                         <div class="flex items-center gap-1.5">
@@ -344,11 +468,11 @@
                                                                 Set Password
                                                             </button>
 
-                                                            {{-- Auto Login per user --}}
-                                                            <button @click="wpAutoLogin(wp, user.username || user.user_login)" :disabled="wpAutoLogging[wp.path] === true"
+                                                            {{-- Auto Login per user (per-user spinner key) --}}
+                                                            <button @click="wpAutoLogin(wp, user.username || user.user_login)" :disabled="wpIsLogging(wp, user.username || user.user_login)"
                                                                 class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-600 bg-green-50 rounded hover:bg-green-100 border border-green-200 disabled:opacity-50">
-                                                                <svg x-show="!wpAutoLogging[wp.path]" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
-                                                                <svg x-show="wpAutoLogging[wp.path]" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                                                <svg x-show="!wpIsLogging(wp, user.username || user.user_login)" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+                                                                <svg x-show="wpIsLogging(wp, user.username || user.user_login)" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                                                                 Login
                                                             </button>
                                                         </div>
