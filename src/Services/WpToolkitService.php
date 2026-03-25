@@ -466,6 +466,7 @@ class WpToolkitService
             'stored_credentials' => $storedCredentials,
             'db_credentials'     => $storedCreds['db'] ?? null,
             'raw_output'         => $output,
+            'debug_stored_creds' => $storedCreds['raw'] ?? null,
         ];
     }
 
@@ -742,6 +743,67 @@ PHP;
     }
 
     /**
+     * Extract a JSON object or array from a string that may contain non-JSON text.
+     *
+     * Finds the first { or [ and its matching closing bracket, then decodes.
+     *
+     * @param string $output Raw output that may contain JSON
+     * @return array|null Decoded JSON as associative array, or null on failure
+     */
+    protected function extractJsonObject(string $output): ?array
+    {
+        $trimmed = trim($output);
+        if (empty($trimmed)) return null;
+
+        // Find first { or [
+        $startChar = null;
+        $jsonStart = null;
+        for ($i = 0; $i < strlen($trimmed); $i++) {
+            if ($trimmed[$i] === '{' || $trimmed[$i] === '[') {
+                $startChar = $trimmed[$i];
+                $jsonStart = $i;
+                break;
+            }
+        }
+
+        if ($jsonStart === null) return null;
+
+        $endChar = $startChar === '{' ? '}' : ']';
+
+        // Find matching closing bracket
+        $depth = 0;
+        $jsonEnd = null;
+        $inString = false;
+        $escape = false;
+        for ($i = $jsonStart; $i < strlen($trimmed); $i++) {
+            $c = $trimmed[$i];
+            if ($escape) { $escape = false; continue; }
+            if ($c === '\\' && $inString) { $escape = true; continue; }
+            if ($c === '"') { $inString = !$inString; continue; }
+            if ($inString) continue;
+            if ($c === $startChar) $depth++;
+            if ($c === $endChar) $depth--;
+            if ($depth === 0) { $jsonEnd = $i + 1; break; }
+        }
+
+        if ($jsonEnd === null) return null;
+
+        $jsonStr = substr($trimmed, $jsonStart, $jsonEnd - $jsonStart);
+        $decoded = json_decode($jsonStr, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return null;
+        }
+
+        // Normalize: if array of objects, return first one
+        if (isset($decoded[0]) && is_array($decoded[0])) {
+            return $decoded[0];
+        }
+
+        return $decoded;
+    }
+
+    /**
      * Get stored credentials from WP Toolkit for a WordPress install.
      *
      * WP Toolkit stores the raw admin username and password when it creates
@@ -767,61 +829,97 @@ PHP;
         // Method 1: wp-toolkit --info (stored admin credentials + login URL)
         $cmd = "wp-toolkit --info -instance-id {$escapedId} -format json 2>&1";
         $output = trim($connection->exec($cmd));
-        $raw .= "wp-toolkit --info: " . mb_substr($output, 0, 2000) . "\n";
+        $raw .= "wp-toolkit --info: " . mb_substr($output, 0, 3000) . "\n";
 
-        if ($output && !str_contains($output, 'Error') && !str_contains($output, 'not found')) {
-            // Find JSON in output
-            $jsonStart = null;
-            for ($i = 0; $i < strlen($output); $i++) {
-                if ($output[$i] === '{' || $output[$i] === '[') {
-                    $jsonStart = $i;
-                    break;
-                }
-            }
+        $this->generic->log('info', '[WpToolkit] wp-toolkit --info raw output', [
+            'install_id' => $installId,
+            'output'     => mb_substr($output, 0, 2000),
+        ]);
 
-            if ($jsonStart !== null) {
-                $decoded = json_decode(substr($output, $jsonStart), true);
-                if ($decoded) {
-                    // Normalize: might be wrapped in array
-                    $info = isset($decoded[0]) ? $decoded[0] : $decoded;
+        // Try to parse JSON from output — don't filter on 'Error' string, just try to find JSON
+        if ($output) {
+            $info = $this->extractJsonObject($output);
 
-                    // Admin credentials
-                    $adminLogin = $info['adminLogin'] ?? $info['admin_login'] ?? $info['adminUser'] ?? $info['admin_user'] ?? null;
-                    $adminPass = $info['adminPassword'] ?? $info['admin_password'] ?? $info['adminPass'] ?? $info['admin_pass'] ?? null;
-                    $adminEmail = $info['adminEmail'] ?? $info['admin_email'] ?? $info['admin_email'] ?? null;
+            if ($info) {
+                $raw .= "PARSED_KEYS: " . implode(', ', array_keys($info)) . "\n";
 
-                    if ($adminLogin) {
-                        $credentials = [
-                            'username' => $adminLogin,
-                            'password' => $adminPass,
-                            'email'    => $adminEmail,
-                        ];
+                $this->generic->log('info', '[WpToolkit] wp-toolkit --info parsed', [
+                    'keys' => array_keys($info),
+                ]);
+
+                // Admin credentials — try every possible field name
+                $adminLogin = null;
+                $adminPass = null;
+                $adminEmail = null;
+
+                foreach ($info as $key => $val) {
+                    $lk = strtolower($key);
+                    if (!$adminLogin && is_string($val) && (
+                        $lk === 'adminlogin' || $lk === 'admin_login' ||
+                        $lk === 'adminuser' || $lk === 'admin_user' ||
+                        $lk === 'adminname' || $lk === 'admin_name'
+                    )) {
+                        $adminLogin = $val;
                     }
-
-                    // Login URL from WP Toolkit (authoritative source)
-                    $siteUrl = $info['siteUrl'] ?? null;
-                    $wptLoginUrl = $info['loginUrl'] ?? null;
-
-                    if ($wptLoginUrl) {
-                        // Determine default login URL for comparison
-                        $defaultLogin = $siteUrl ? rtrim($siteUrl, '/') . '/wp-login.php' : null;
-                        $defaultAdmin = $siteUrl ? rtrim($siteUrl, '/') . '/wp-admin/' : null;
-
-                        $isModified = true;
-                        if ($defaultLogin && $wptLoginUrl === $defaultLogin) {
-                            $isModified = false;
-                        }
-                        if ($defaultAdmin && $wptLoginUrl === $defaultAdmin) {
-                            $isModified = false;
-                        }
-
-                        $loginInfo = [
-                            'url'         => $wptLoginUrl,
-                            'is_modified' => $isModified,
-                            'default_url' => $defaultLogin,
-                        ];
+                    if (!$adminPass && is_string($val) && (
+                        $lk === 'adminpassword' || $lk === 'admin_password' ||
+                        $lk === 'adminpass' || $lk === 'admin_pass' ||
+                        $lk === 'password'
+                    )) {
+                        $adminPass = $val;
+                    }
+                    if (!$adminEmail && is_string($val) && (
+                        $lk === 'adminemail' || $lk === 'admin_email' ||
+                        $lk === 'email'
+                    )) {
+                        $adminEmail = $val;
                     }
                 }
+
+                // Set credentials if we found a login OR a password (don't require both)
+                if ($adminLogin || $adminPass) {
+                    $credentials = [
+                        'username' => $adminLogin,
+                        'password' => $adminPass,
+                        'email'    => $adminEmail,
+                    ];
+                }
+
+                $raw .= "CREDS: login=" . ($adminLogin ?? 'NULL') . " pass=" . ($adminPass ? 'YES(' . strlen($adminPass) . ')' : 'NULL') . "\n";
+
+                // Login URL from WP Toolkit (authoritative source)
+                $siteUrl = null;
+                $wptLoginUrl = null;
+                foreach ($info as $key => $val) {
+                    $lk = strtolower($key);
+                    if (!$siteUrl && is_string($val) && ($lk === 'siteurl' || $lk === 'site_url')) {
+                        $siteUrl = $val;
+                    }
+                    if (!$wptLoginUrl && is_string($val) && ($lk === 'loginurl' || $lk === 'login_url')) {
+                        $wptLoginUrl = $val;
+                    }
+                }
+
+                if ($wptLoginUrl) {
+                    $defaultLogin = $siteUrl ? rtrim($siteUrl, '/') . '/wp-login.php' : null;
+                    $defaultAdmin = $siteUrl ? rtrim($siteUrl, '/') . '/wp-admin/' : null;
+
+                    $isModified = true;
+                    if ($defaultLogin && $wptLoginUrl === $defaultLogin) $isModified = false;
+                    if ($defaultAdmin && $wptLoginUrl === $defaultAdmin) $isModified = false;
+
+                    $loginInfo = [
+                        'url'         => $wptLoginUrl,
+                        'is_modified' => $isModified,
+                        'default_url' => $defaultLogin,
+                    ];
+                }
+            } else {
+                $raw .= "JSON_PARSE_FAILED\n";
+                $this->generic->log('warning', '[WpToolkit] wp-toolkit --info JSON parse failed', [
+                    'install_id' => $installId,
+                    'output'     => mb_substr($output, 0, 500),
+                ]);
             }
         }
 
