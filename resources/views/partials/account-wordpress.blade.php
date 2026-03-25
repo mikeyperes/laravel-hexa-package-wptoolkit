@@ -238,7 +238,18 @@
                                 </template>
                             </div>
 
-                            {{-- Login URL (shown after credentials loaded, uses actual login_url from API) --}}
+                            {{-- Default Login URL (before credentials loaded) --}}
+                            <template x-if="!wpCredentials[wp.path]">
+                                <div class="flex items-center gap-2 mb-3 text-xs">
+                                    <a :href="wp.url + '/wp-login.php'" target="_blank" class="text-gray-400 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
+                                        <span x-text="wp.url + '/wp-login.php'"></span>
+                                        <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                    </a>
+                                    <span class="text-gray-300">(default)</span>
+                                </div>
+                            </template>
+
+                            {{-- Actual Login URL (after credentials loaded, uses login_url from API) --}}
                             <template x-if="wpCredentials[wp.path] && wpCredentials[wp.path].login_info && wpCredentials[wp.path].login_info.url">
                                 <div class="flex flex-wrap items-center gap-3 mb-3 text-xs">
                                     <a :href="wpCredentials[wp.path].login_info.url" target="_blank" class="text-gray-500 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
@@ -255,7 +266,7 @@
                             {{-- Action Buttons --}}
                             <div class="flex flex-wrap items-center gap-2 mb-3">
                                 {{-- Show Credentials (only visible before credentials are loaded) --}}
-                                <button @click="wpFetchCreds(wp)" :disabled="wpCredLoading[wp.path]"
+                                <button @click="wpFetchCreds(wp)" :disabled="wpCredLoading[wp.path] === true"
                                     x-show="!wpCredentials[wp.path]"
                                     class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-50 rounded-lg hover:bg-gray-100 border border-gray-200 disabled:opacity-50">
                                     <svg x-show="!wpCredLoading[wp.path]" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
@@ -264,7 +275,7 @@
                                 </button>
 
                                 {{-- Auto Login --}}
-                                <button @click="wpAutoLogin(wp, wp.admin_user || 'admin')" :disabled="wpAutoLogging[wp.path]"
+                                <button @click="wpAutoLogin(wp, wp.admin_user || 'admin')" :disabled="wpAutoLogging[wp.path] === true"
                                     class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 border border-green-200 disabled:opacity-50">
                                     <svg x-show="!wpAutoLogging[wp.path]" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
                                     <svg x-show="wpAutoLogging[wp.path]" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
@@ -323,7 +334,7 @@
                                                             </button>
 
                                                             {{-- Auto Login per user --}}
-                                                            <button @click="wpAutoLogin(wp, user.username || user.user_login)" :disabled="wpAutoLogging[wp.path]"
+                                                            <button @click="wpAutoLogin(wp, user.username || user.user_login)" :disabled="wpAutoLogging[wp.path] === true"
                                                                 class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-600 bg-green-50 rounded hover:bg-green-100 border border-green-200 disabled:opacity-50">
                                                                 <svg x-show="!wpAutoLogging[wp.path]" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
                                                                 <svg x-show="wpAutoLogging[wp.path]" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
