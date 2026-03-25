@@ -452,6 +452,11 @@ class WpToolkitService
                 $adminUsers[0]['stored_login_username'] = $storedUsername;
                 $adminUsers[0]['is_default_login'] = true;
             }
+
+            // Sort: default login user always first
+            usort($adminUsers, function ($a, $b) {
+                return ($b['is_default_login'] ?? false) <=> ($a['is_default_login'] ?? false);
+            });
         }
 
         $this->generic->log('info', '[WpToolkit] getCredentials complete', [
@@ -862,14 +867,34 @@ PHP;
         }
 
         // Password is AES-256-GCM encrypted in SQLite — we cannot decrypt it
-        // But the login username IS plaintext and is what we need for auto-login
+        // Use wp-toolkit --site-admin-reset-password to get a plaintext password
         $passwordEncrypted = false;
         if ($adminPass && str_starts_with($adminPass, '$aes-256-gcm$')) {
             $passwordEncrypted = true;
-            $adminPass = null; // Can't use encrypted password
+            $adminPass = null;
+
+            // Reset password via WP Toolkit CLI to get plaintext
+            if ($adminLogin) {
+                $escapedLogin = escapeshellarg($adminLogin);
+                $resetCmd = "wp-toolkit --site-admin-reset-password -instance-id {$escapedId} -admin-login {$escapedLogin} 2>&1";
+                $resetOutput = trim($connection->exec($resetCmd));
+                $raw .= "RESET_PASSWORD: " . $resetOutput . "\n";
+
+                $this->generic->log('info', '[WpToolkit] Password reset via CLI', [
+                    'install_id' => $installId,
+                    'login'      => $adminLogin,
+                    'output'     => $resetOutput,
+                ]);
+
+                // Parse: "  login     hexa-pr-wire\n  password  c7^!t!VHio3OC4_4"
+                if (preg_match('/password\s+(.+)$/m', $resetOutput, $m)) {
+                    $adminPass = trim($m[1]);
+                    $passwordEncrypted = false;
+                }
+            }
         }
 
-        $raw .= "SQLITE_CREDS: login=" . ($adminLogin ?? 'NULL') . " pass=" . ($passwordEncrypted ? 'ENCRYPTED' : ($adminPass ? 'YES' : 'NULL')) . "\n";
+        $raw .= "SQLITE_CREDS: login=" . ($adminLogin ?? 'NULL') . " pass=" . ($adminPass ? 'YES(' . strlen($adminPass) . ')' : ($passwordEncrypted ? 'ENCRYPTED' : 'NULL')) . "\n";
 
         if ($adminLogin) {
             $credentials = [

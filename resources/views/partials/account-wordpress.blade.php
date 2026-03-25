@@ -387,10 +387,7 @@
                                                                 </button>
                                                             </div>
                                                         </template>
-                                                        <template x-if="!user.stored_password && user.is_default_login && wpCredentials[wp.path]?.stored_credentials?.password_encrypted">
-                                                            <span class="text-gray-400 text-xs italic">Encrypted (use Set Password)</span>
-                                                        </template>
-                                                        <template x-if="!user.stored_password && !(user.is_default_login && wpCredentials[wp.path]?.stored_credentials?.password_encrypted)">
+                                                        <template x-if="!user.stored_password">
                                                             <span class="text-gray-400 text-xs">-</span>
                                                         </template>
                                                     </td>
