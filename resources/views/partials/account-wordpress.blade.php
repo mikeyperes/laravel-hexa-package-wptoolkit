@@ -102,7 +102,7 @@ document.addEventListener('alpine:init', function() {
                 var info = 'Login URL: ' + (wp.login_url || (wp.url + '/wp-login.php')) + '\nUsername: ' + (user.user_login || user.username) + '\nPassword: ' + (user.stored_password || 'N/A');
                 this.wpDoCopy(info, wp.path + '-' + (user.user_login || user.username) + '_login');
             },
-            wpFormatDate(s) {if(!s)return'-';try{var d=new Date(s+(s.includes('T')?'':'Z'));return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});}catch(e){return s;}}
+            wpFormatDate(s) {if(!s)return'-';try{var d=new Date(s+(s.includes('T')?'':'Z'));return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'});}catch(e){return s;}}
         };
     });
 });
