@@ -230,7 +230,7 @@ document.addEventListener('alpine:init', function() {
                             {{-- User Filter (shown only when credentials are loaded and there are users) --}}
                             <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error && ((wpCredentials[wp.path].admin_users && wpCredentials[wp.path].admin_users.length > 1) || (wpCredentials[wp.path].credentials && wpCredentials[wp.path].credentials.users && wpCredentials[wp.path].credentials.users.length > 1))">
                                 <div class="mb-3">
-                                    <input type="text" x-model="wpUserFilter" autocomplete="off" data-1p-ignore
+                                    <input type="text" x-model="wpUserFilter" autocomplete="one-time-code" data-1p-ignore data-lpignore="true" data-form-type="other"
                                         placeholder="Filter users by username or email..."
                                         class="w-full px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:border-blue-400 focus:ring-1 focus:ring-blue-400 placeholder-gray-400">
                                 </div>
@@ -358,7 +358,7 @@ document.addEventListener('alpine:init', function() {
                             <div>
                                 <label class="block text-xs font-medium text-gray-500 mb-1">New Password</label>
                                 <div class="flex items-center gap-2">
-                                    <input type="text" x-model="wpResetForm.password" autocomplete="off" data-1p-ignore
+                                    <input type="text" x-model="wpResetForm.password" autocomplete="one-time-code" data-1p-ignore data-lpignore="true" data-form-type="other"
                                         class="flex-1 px-3 py-2 text-sm font-mono border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 break-words"
                                         placeholder="Enter or generate password">
                                     <button @click="wpGeneratePassword()"
