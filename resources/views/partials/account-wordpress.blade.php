@@ -14,225 +14,86 @@
 --}}
 
 @if(Route::has('wptoolkit.get-installs'))
+@push('scripts')
+<script>
+document.addEventListener('alpine:init', function() {
+    if (Alpine.components && Alpine.components.wpToolkit) return;
+    Alpine.data('wpToolkit', function(cfg) {
+        return {
+            wpOpen: true, wpLoading: false, wpInstalls: null, wpCredentials: {}, wpCredLoading: {},
+            wpAutoLogging: {}, wpPasswordVisible: {}, wpResetForm: null, wpResetResult: null,
+            wpScanError: null, wpUserFilter: '',
+            _h() { return {'Content-Type':'application/json','X-CSRF-TOKEN':document.querySelector('meta[name=csrf-token]').content,'Accept':'application/json'}; },
+            wpScan() {
+                this.wpLoading = true; this.wpScanError = null;
+                fetch(cfg.routes.getInstalls, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,username:cfg.username})})
+                .then(r=>r.json()).then(d=>{this.wpInstalls=d.installs||[];this.wpLoading=false;this.wpOpen=true;(this.wpInstalls||[]).forEach(wp=>this.wpFetchCreds(wp));})
+                .catch(e=>{this.wpLoading=false;this.wpScanError='Failed to scan: '+(e.message||'Unknown error');});
+            },
+            wpFetchCreds(wp) {
+                this.wpCredLoading[wp.path]=true;
+                fetch(cfg.routes.getCredentials, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:wp.id,wp_path:wp.path,username:cfg.username,login_url:wp.url})})
+                .then(r=>r.json()).then(d=>{this.wpCredentials[wp.path]=d;this.wpCredLoading[wp.path]=false;})
+                .catch(e=>{this.wpCredentials[wp.path]={error:e.message||'Failed'};this.wpCredLoading[wp.path]=false;});
+            },
+            wpAutoLogin(wp, wpUser) {
+                var key=wp.path+'::'+wpUser; this.wpAutoLogging[key]=true;
+                fetch(cfg.routes.wpLogin, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,wp_path:wp.path,username:cfg.username,wp_user:wpUser,site_url:wp.url})})
+                .then(r=>r.json()).then(d=>{this.wpAutoLogging[key]=false;if(d.url)window.open(d.url,'_blank');else alert('Auto-login failed: '+(d.error||'no URL'));})
+                .catch(e=>{this.wpAutoLogging[key]=false;alert('Auto-login failed: '+(e.message||'Unknown error'));});
+            },
+            wpBestLoginUser(wp) {
+                var users=this.wpCredentials[wp.path]?.admin_users||[];
+                for(var i=0;i<users.length;i++){if(users[i].is_default_login)return users[i].user_login||users[i].username;}
+                if(this.wpCredentials[wp.path]?.stored_credentials?.username)return this.wpCredentials[wp.path].stored_credentials.username;
+                return wp.admin_user||'admin';
+            },
+            wpIsLogging(wp, wpUser) { return this.wpAutoLogging[wp.path+'::'+wpUser]===true; },
+            wpOpenReset(wp, user) {
+                this.wpResetForm={path:wp.path,installId:wp.id,wpPath:wp.path,wpUrl:wp.url,username:user.username||user.user_login||'admin',email:user.email||user.user_email||'',password:'',show:true,saving:false};
+                this.wpResetResult=null;
+            },
+            wpGeneratePassword() {
+                var chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*',pw='';
+                for(var i=0;i<24;i++)pw+=chars.charAt(Math.floor(Math.random()*chars.length));this.wpResetForm.password=pw;
+            },
+            wpDoReset() {
+                if(!this.wpResetForm.password)return;this.wpResetForm.saving=true;this.wpResetResult=null;
+                fetch(cfg.routes.resetPassword, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:this.wpResetForm.installId,wp_path:this.wpResetForm.wpPath,username:cfg.username,wp_user:this.wpResetForm.username})})
+                .then(r=>r.json()).then(d=>{this.wpResetForm.saving=false;if(d.password){this.wpResetResult={success:true,password:d.password};}else{this.wpResetResult={success:false,message:d.error||d.message||'Failed'};}})
+                .catch(e=>{this.wpResetForm.saving=false;this.wpResetResult={success:false,message:'Request failed: '+(e.message||'Unknown error')};});
+            },
+            wpUserMatches(user) {
+                if(!this.wpUserFilter)return true;var q=this.wpUserFilter.toLowerCase();
+                return(user.username||user.user_login||'').toLowerCase().includes(q)||(user.email||user.user_email||'').toLowerCase().includes(q)||(user.display_name||'').toLowerCase().includes(q);
+            },
+            wpCopyText(text, btn) {
+                navigator.clipboard.writeText(text);
+                if(btn){var o=btn.innerText;btn.innerText='Copied!';btn.classList.add('bg-green-100','text-green-700','border-green-300');setTimeout(()=>{btn.innerText=o;btn.classList.remove('bg-green-100','text-green-700','border-green-300');},1500);}
+            },
+            wpCopyLoginInfo(wp, user, btn) {
+                var info='Login URL: '+(wp.login_url||(wp.url+'/wp-login.php'))+'\nUsername: '+(user.username||user.user_login)+'\nPassword: '+(user.stored_password||'N/A');
+                navigator.clipboard.writeText(info);
+                if(btn){var o=btn.innerText;btn.innerText='Copied!';btn.classList.add('bg-green-100','text-green-700','border-green-300');setTimeout(()=>{btn.innerText=o;btn.classList.remove('bg-green-100','text-green-700','border-green-300');},1500);}
+            },
+            wpFormatDate(s) {if(!s)return'-';try{var d=new Date(s+(s.includes('T')?'':'Z'));return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});}catch(e){return s;}}
+        };
+    });
+});
+</script>
+@endpush
+
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6"
-     x-data="{
-        wpOpen: true,
-        wpLoading: false,
-        wpInstalls: null,
-        wpCredentials: {},
-        wpCredLoading: {},
-        wpAutoLogging: {},
-        wpPasswordVisible: {},
-        wpResetForm: null,
-        wpResetResult: null,
-        wpScanError: null,
-        wpUserFilter: '',
-
-        /**
-         * Scan for WordPress installations on this account
-         */
-        wpScan() {
-            this.wpLoading = true;
-            this.wpScanError = null;
-            fetch('{{ route('wptoolkit.get-installs') }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
-                body: JSON.stringify({ server_id: {{ $server->id }}, username: '{{ $account->username }}' })
-            }).then(r => r.json()).then(d => {
-                this.wpInstalls = d.installs || [];
-                this.wpLoading = false;
-                this.wpOpen = true;
-                // Auto-fetch credentials for each install
-                (this.wpInstalls || []).forEach(wp => this.wpFetchCreds(wp));
-            }).catch(e => {
-                this.wpLoading = false;
-                this.wpScanError = 'Failed to scan: ' + (e.message || 'Unknown error');
-            });
-        },
-
-        /**
-         * Fetch credentials for a specific WordPress installation
-         * @param {Object} wp  The WordPress install object from scan results
-         */
-        wpFetchCreds(wp) {
-            this.wpCredLoading[wp.path] = true;
-            fetch('{{ route('wptoolkit.get-credentials') }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
-                body: JSON.stringify({ server_id: {{ $server->id }}, install_id: wp.id, wp_path: wp.path, username: '{{ $account->username }}', login_url: wp.url })
-            }).then(r => r.json()).then(d => {
-                this.wpCredentials[wp.path] = d;
-                this.wpCredLoading[wp.path] = false;
-            }).catch(e => {
-                this.wpCredentials[wp.path] = { error: e.message || 'Failed to fetch credentials' };
-                this.wpCredLoading[wp.path] = false;
-            });
-        },
-
-        /**
-         * One-click auto-login to WordPress admin
-         * @param {Object} wp      The WordPress install object
-         * @param {string} wpUser  The WordPress username to log in as
-         */
-        wpAutoLogin(wp, wpUser) {
-            var key = wp.path + '::' + wpUser;
-            this.wpAutoLogging[key] = true;
-            fetch('{{ route('wptoolkit.wp-login') }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
-                body: JSON.stringify({ server_id: {{ $server->id }}, wp_path: wp.path, username: '{{ $account->username }}', wp_user: wpUser, site_url: wp.url })
-            }).then(r => r.json()).then(d => {
-                this.wpAutoLogging[key] = false;
-                if (d.url) window.open(d.url, '_blank');
-                else alert('Auto-login failed: ' + (d.error || 'no URL returned'));
-            }).catch(e => {
-                this.wpAutoLogging[key] = false;
-                alert('Auto-login failed: ' + (e.message || 'Unknown error'));
-            });
-        },
-
-        /**
-         * Get the best username for auto-login (stored credentials > admin_user > 'admin')
-         * @param {Object} wp The WordPress install object
-         * @return {string}
-         */
-        wpBestLoginUser(wp) {
-            // Check admin_users for one marked as default login
-            var users = this.wpCredentials[wp.path]?.admin_users || [];
-            for (var i = 0; i < users.length; i++) {
-                if (users[i].is_default_login) return users[i].user_login || users[i].username;
-            }
-            // Fall back to scan data or stored credentials
-            if (this.wpCredentials[wp.path]?.stored_credentials?.username) {
-                return this.wpCredentials[wp.path].stored_credentials.username;
-            }
-            return wp.admin_user || 'admin';
-        },
-
-        /**
-         * Check if a specific user's auto-login is in progress
-         * @param {Object} wp     The WordPress install object
-         * @param {string} wpUser The WordPress username
-         * @return {boolean}
-         */
-        wpIsLogging(wp, wpUser) {
-            return this.wpAutoLogging[wp.path + '::' + wpUser] === true;
-        },
-
-        /**
-         * Open the password reset modal for a specific user
-         * @param {Object} wp    The WordPress install object
-         * @param {Object} user  The WordPress user object
-         */
-        wpOpenReset(wp, user) {
-            this.wpResetForm = {
-                path: wp.path,
-                installId: wp.id,
-                wpPath: wp.path,
-                wpUrl: wp.url,
-                username: user.username || user.user_login || 'admin',
-                email: user.email || user.user_email || '',
-                password: '',
-                show: true,
-                saving: false
-            };
-            this.wpResetResult = null;
-        },
-
-        /**
-         * Generate a random 24-character password
-         */
-        wpGeneratePassword() {
-            const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-            let pw = '';
-            for (let i = 0; i < 24; i++) pw += chars.charAt(Math.floor(Math.random() * chars.length));
-            this.wpResetForm.password = pw;
-        },
-
-        /**
-         * Execute the password reset via the API
-         */
-        wpDoReset() {
-            if (!this.wpResetForm.password) return;
-            this.wpResetForm.saving = true;
-            this.wpResetResult = null;
-            fetch('{{ route('wptoolkit.reset-password') }}', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
-                body: JSON.stringify({ server_id: {{ $server->id }}, install_id: this.wpResetForm.installId, wp_path: this.wpResetForm.wpPath, username: '{{ $account->username }}', wp_user: this.wpResetForm.username })
-            }).then(r => r.json()).then(d => {
-                this.wpResetForm.saving = false;
-                if (d.password) {
-                    this.wpResetResult = { success: true, message: 'Password reset successfully. New password: ' + d.password, password: d.password };
-                } else {
-                    this.wpResetResult = { success: false, message: d.error || d.message || 'Password reset failed' };
-                }
-            }).catch(e => {
-                this.wpResetForm.saving = false;
-                this.wpResetResult = { success: false, message: 'Request failed: ' + (e.message || 'Unknown error') };
-            });
-        },
-
-        /**
-         * Check if a WP user row matches the current filter
-         * @param {Object} user The WordPress user object
-         * @return {boolean}
-         */
-        wpUserMatches(user) {
-            if (!this.wpUserFilter) return true;
-            var q = this.wpUserFilter.toLowerCase();
-            var uname = (user.username || user.user_login || '').toLowerCase();
-            var email = (user.email || user.user_email || '').toLowerCase();
-            var display = (user.display_name || '').toLowerCase();
-            return uname.includes(q) || email.includes(q) || display.includes(q);
-        },
-
-        /**
-         * Copy text to clipboard and show brief "Copied" feedback on the button
-         * @param {string} text  The text to copy
-         * @param {HTMLElement} btn  The button element for feedback
-         */
-        wpCopyText(text, btn) {
-            navigator.clipboard.writeText(text);
-            if (btn) {
-                var orig = btn.innerText;
-                btn.innerText = 'Copied!';
-                btn.classList.add('bg-green-100', 'text-green-700', 'border-green-300');
-                setTimeout(() => { btn.innerText = orig; btn.classList.remove('bg-green-100', 'text-green-700', 'border-green-300'); }, 1500);
-            }
-        },
-
-        /**
-         * Copy formatted login info to clipboard
-         * @param {Object} wp    The WordPress install object
-         * @param {Object} user  The WordPress user object
-         * @param {HTMLElement} btn  The button element for feedback
-         */
-        wpCopyLoginInfo(wp, user, btn) {
-            var loginUrl = wp.login_url || (wp.url + '/wp-login.php');
-            var info = 'Login URL: ' + loginUrl + '\nUsername: ' + (user.username || user.user_login) + '\nPassword: ' + (user.stored_password || 'N/A');
-            navigator.clipboard.writeText(info);
-            if (btn) {
-                var orig = btn.innerText;
-                btn.innerText = 'Copied!';
-                btn.classList.add('bg-green-100', 'text-green-700', 'border-green-300');
-                setTimeout(() => { btn.innerText = orig; btn.classList.remove('bg-green-100', 'text-green-700', 'border-green-300'); }, 1500);
-            }
-        },
-
-        /**
-         * Format a date string relative to user's timezone
-         * @param {string} dateStr The date string (e.g. '2024-01-15 03:22:00')
-         * @return {string}
-         */
-        wpFormatDate(dateStr) {
-            if (!dateStr) return '-';
-            try {
-                var d = new Date(dateStr + (dateStr.includes('T') ? '' : 'Z'));
-                return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-            } catch(e) { return dateStr; }
+     x-data="wpToolkit({
+        serverId: {{ $server->id }},
+        username: '{{ $account->username }}',
+        routes: {
+            getInstalls: '{{ route('wptoolkit.get-installs') }}',
+            getCredentials: '{{ route('wptoolkit.get-credentials') }}',
+            wpLogin: '{{ route('wptoolkit.wp-login') }}',
+            resetPassword: '{{ route('wptoolkit.reset-password') }}'
         }
-     }">
+     })">
 
     {{-- Section Header (entire header is clickable for expand/collapse) --}}
     <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between cursor-pointer" @click="wpOpen = !wpOpen">
