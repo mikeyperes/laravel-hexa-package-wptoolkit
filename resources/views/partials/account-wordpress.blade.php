@@ -164,51 +164,20 @@ document.addEventListener('alpine:init', function() {
                                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 shrink-0 ml-3" x-text="'WP ' + (wp.version || '?')"></span>
                             </div>
 
-                            {{-- Admin user + password + copy buttons + badge --}}
-                            <div class="flex flex-wrap items-center gap-3 mb-3 text-xs text-gray-500">
-                                {{-- Username --}}
+                            {{-- Row 1: Admin user + badge --}}
+                            <div class="flex flex-wrap items-center gap-3 mb-1 text-xs text-gray-500">
                                 <template x-if="wp.admin_user || wpCredentials[wp.path]?.stored_credentials?.username">
                                     <span class="inline-flex items-center gap-1">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                                         <span class="font-mono text-gray-700" x-text="wp.admin_user || wpCredentials[wp.path]?.stored_credentials?.username"></span>
                                     </span>
                                 </template>
-
-                                {{-- Password (masked) + eye toggle for default user --}}
-                                <template x-if="wpCredentials[wp.path]?.stored_credentials?.password || (wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login && u.stored_password)">
-                                    <span class="inline-flex items-center gap-1">
-                                        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                                        <span class="font-mono text-gray-700" x-data="{show:false}" @click="show=!show"
-                                            x-text="show ? (wpCredentials[wp.path]?.stored_credentials?.password || ((wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login) || {}).stored_password || '') : String.fromCharCode(8226).repeat(8)"
-                                            class="cursor-pointer hover:text-gray-900"></span>
-                                    </span>
-                                </template>
-
-                                {{-- Copy PW + Copy Login for default user --}}
-                                <template x-if="(wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login && u.stored_password)">
-                                    <span class="inline-flex items-center gap-1.5">
-                                        <button x-data="{copied:false}" @click="var du=(wpCredentials[wp.path]?.admin_users||[]).find(u=>u.is_default_login);if(du)wpCopyText(du.stored_password);copied=true;setTimeout(()=>copied=false,1500)"
-                                            class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors"
-                                            :class="copied ? 'text-green-700 bg-green-50 border-green-300' : 'text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100'">
-                                            <span x-text="copied ? 'Copied!' : 'Copy PW'"></span>
-                                        </button>
-                                        <button x-data="{copied:false}" @click="var du=(wpCredentials[wp.path]?.admin_users||[]).find(u=>u.is_default_login);if(du)wpCopyLoginInfo(wp,du);copied=true;setTimeout(()=>copied=false,1500)"
-                                            class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors"
-                                            :class="copied ? 'text-green-700 bg-green-50 border-green-300' : 'text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100'">
-                                            <span x-text="copied ? 'Copied!' : 'Copy Login'"></span>
-                                        </button>
-                                    </span>
-                                </template>
-
-                                {{-- Green badge: credentials loaded --}}
                                 <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error">
                                     <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                                         <span x-text="(wpCredentials[wp.path].admin_users || []).length + ' users'"></span>
                                     </span>
                                 </template>
-
-                                {{-- Red badge: credential fetch failed --}}
                                 <template x-if="wpCredentials[wp.path] && wpCredentials[wp.path].error">
                                     <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -216,6 +185,27 @@ document.addEventListener('alpine:init', function() {
                                     </span>
                                 </template>
                             </div>
+
+                            {{-- Row 2: Password (masked, click to show) + Copy Password + Copy Login Info --}}
+                            <template x-if="(wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login && u.stored_password)">
+                                <div class="flex flex-wrap items-center gap-2 mb-3 text-xs">
+                                    <span class="inline-flex items-center gap-1 text-gray-500" x-data="{show:false}">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                                        <span class="font-mono text-gray-700 cursor-pointer hover:text-gray-900" @click="show=!show"
+                                            x-text="show ? ((wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login) || {}).stored_password || '' : String.fromCharCode(8226).repeat(8)"></span>
+                                    </span>
+                                    <button @click="var du=(wpCredentials[wp.path]?.admin_users||[]).find(u=>u.is_default_login);if(du)$dispatch('copy-text',{text:du.stored_password,label:'Password'})"
+                                        class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 rounded hover:bg-blue-100 border border-blue-200">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                        Copy Password
+                                    </button>
+                                    <button @click="var du=(wpCredentials[wp.path]?.admin_users||[]).find(u=>u.is_default_login);if(du){var info='Login URL: '+(wp.login_url||(wp.url+'/wp-login.php'))+'\nUsername: '+(du.user_login||du.username)+'\nPassword: '+du.stored_password;$dispatch('copy-text',{text:info,label:'Login Info'})}"
+                                        class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-purple-600 bg-purple-50 rounded hover:bg-purple-100 border border-purple-200">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                                        Copy Login Info
+                                    </button>
+                                </div>
+                            </template>
 
                             {{-- Login URL (from scan data — always available immediately) --}}
                             <template x-if="wp.login_url">
@@ -304,19 +294,15 @@ document.addEventListener('alpine:init', function() {
                                                                 </button>
                                                             </div>
                                                             <div class="flex items-center gap-1.5 mt-1">
-                                                                <button x-data="{copied:false}" @click="wpCopyText(user.stored_password);copied=true;setTimeout(()=>copied=false,1500)"
-                                                                    class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors"
-                                                                    :class="copied ? 'text-green-700 bg-green-50 border-green-300' : 'text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100'">
-                                                                    <svg x-show="!copied" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                                                                    <svg x-show="copied" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                                                    <span x-text="copied ? 'Copied!' : 'Copy PW'"></span>
+                                                                <button @click="$dispatch('copy-text',{text:user.stored_password,label:'Password'})"
+                                                                    class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100">
+                                                                    <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                                    Copy PW
                                                                 </button>
-                                                                <button x-data="{copied:false}" @click="wpCopyLoginInfo(wp, user);copied=true;setTimeout(()=>copied=false,1500)"
-                                                                    class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors"
-                                                                    :class="copied ? 'text-green-700 bg-green-50 border-green-300' : 'text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100'">
-                                                                    <svg x-show="!copied" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-                                                                    <svg x-show="copied" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                                                    <span x-text="copied ? 'Copied!' : 'Copy Login'"></span>
+                                                                <button @click="var info='Login URL: '+(wp.login_url||(wp.url+'/wp-login.php'))+'\nUsername: '+(user.user_login||user.username)+'\nPassword: '+user.stored_password;$dispatch('copy-text',{text:info,label:'Login Info'})"
+                                                                    class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100">
+                                                                    <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                                                                    Copy Login
                                                                 </button>
                                                             </div>
                                                         </template>
