@@ -22,7 +22,7 @@ document.addEventListener('alpine:init', function() {
         return {
             wpOpen: true, wpLoading: false, wpInstalls: null, wpCredentials: {}, wpCredLoading: {},
             wpAutoLogging: {}, wpPasswordVisible: {}, wpResetForm: null, wpResetResult: null,
-            wpScanError: null, wpUserFilter: '', wpCopyDone: {},
+            wpScanError: null, wpUserFilter: '', wpCopyDone: {}, wpLoginUrls: {},
             _h() { return {'Content-Type':'application/json','X-CSRF-TOKEN':document.querySelector('meta[name=csrf-token]').content,'Accept':'application/json'}; },
             wpScan() {
                 this.wpLoading = true; this.wpScanError = null;
@@ -37,10 +37,23 @@ document.addEventListener('alpine:init', function() {
                 .catch(e=>{this.wpCredentials[wp.path]={error:e.message||'Failed'};this.wpCredLoading[wp.path]=false;});
             },
             wpAutoLogin(wp, wpUser) {
-                var key=wp.path+'::'+wpUser; this.wpAutoLogging[key]=true;
+                var key=wp.path+'::'+wpUser;
+                this.wpAutoLogging[key]=true;
+                this.wpLoginUrls[key]=null;
                 fetch(cfg.routes.wpLogin, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,wp_path:wp.path,username:cfg.username,wp_user:wpUser,site_url:wp.url})})
-                .then(r=>r.json()).then(d=>{this.wpAutoLogging[key]=false;if(d.url)window.open(d.url,'_blank');else alert('Auto-login failed: '+(d.error||'no URL'));})
-                .catch(e=>{this.wpAutoLogging[key]=false;alert('Auto-login failed: '+(e.message||'Unknown error'));});
+                .then(r=>r.json()).then(d=>{
+                    this.wpAutoLogging[key]=false;
+                    if(d.url){
+                        this.wpLoginUrls[key]=d.url;
+                        var w=window.open(d.url,'_blank');
+                        if(!w){this.wpLoginUrls[key+'_blocked']=true;}
+                    } else {
+                        this.wpLoginUrls[key]='ERROR: '+(d.error||'no URL returned');
+                    }
+                }).catch(e=>{
+                    this.wpAutoLogging[key]=false;
+                    this.wpLoginUrls[key]='ERROR: '+(e.message||'Unknown error');
+                });
             },
             wpBestLoginUser(wp) {
                 var users=this.wpCredentials[wp.path]?.admin_users||[];
@@ -367,6 +380,29 @@ document.addEventListener('alpine:init', function() {
                                                                 Login
                                                             </button>
                                                         </div>
+                                                        {{-- Login URL result (shown after auto-login) --}}
+                                                        <template x-if="wpLoginUrls[wp.path + '::' + (user.username || user.user_login)]">
+                                                            <div class="mt-1.5">
+                                                                <template x-if="wpLoginUrls[wp.path + '::' + (user.username || user.user_login)].startsWith('ERROR')">
+                                                                    <div class="text-[10px] text-red-600 break-words" x-text="wpLoginUrls[wp.path + '::' + (user.username || user.user_login)]"></div>
+                                                                </template>
+                                                                <template x-if="!wpLoginUrls[wp.path + '::' + (user.username || user.user_login)].startsWith('ERROR')">
+                                                                    <div class="flex items-center gap-1">
+                                                                        <a :href="wpLoginUrls[wp.path + '::' + (user.username || user.user_login)]" target="_blank"
+                                                                            class="text-[10px] text-blue-600 hover:underline break-all"
+                                                                            x-text="wpLoginUrls[wp.path + '::' + (user.username || user.user_login)]"></a>
+                                                                        <button @click="wpDoCopy(wpLoginUrls[wp.path + '::' + (user.username || user.user_login)], wp.path + '::' + (user.username || user.user_login) + '_url')"
+                                                                            class="shrink-0 p-0.5 text-gray-400 hover:text-green-600" title="Copy URL">
+                                                                            <svg x-show="!wpCopyDone[wp.path + '::' + (user.username || user.user_login) + '_url']" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                                            <svg x-show="wpCopyDone[wp.path + '::' + (user.username || user.user_login) + '_url']" class="w-3 h-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                                        </button>
+                                                                    </div>
+                                                                </template>
+                                                                <template x-if="wpLoginUrls[wp.path + '::' + (user.username || user.user_login) + '_blocked']">
+                                                                    <div class="text-[10px] text-yellow-600">Popup blocked — use the URL above</div>
+                                                                </template>
+                                                            </div>
+                                                        </template>
                                                     </td>
                                                 </tr>
                                             </template>
