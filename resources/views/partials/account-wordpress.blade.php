@@ -67,10 +67,40 @@ document.addEventListener('alpine:init', function() {
                 if(!this.wpUserFilter)return true;var q=this.wpUserFilter.toLowerCase();
                 return(user.username||user.user_login||'').toLowerCase().includes(q)||(user.email||user.user_email||'').toLowerCase().includes(q)||(user.display_name||'').toLowerCase().includes(q);
             },
-            wpCopyText(text) { navigator.clipboard.writeText(text); },
-            wpCopyLoginInfo(wp, user) {
-                var info='Login URL: '+(wp.login_url||(wp.url+'/wp-login.php'))+'\nUsername: '+(user.username||user.user_login)+'\nPassword: '+(user.stored_password||'N/A');
-                navigator.clipboard.writeText(info);
+            wpDoCopy(text, doneKey) {
+                var self = this;
+                try {
+                    var ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                } catch(e) {}
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).catch(function(){});
+                }
+                self.wpCopyDone[doneKey] = true;
+                setTimeout(function() { self.wpCopyDone[doneKey] = false; }, 2000);
+            },
+            wpCopyPw(wp) {
+                var du = (this.wpCredentials[wp.path]?.admin_users || []).find(function(u) { return u.is_default_login; });
+                if (du && du.stored_password) this.wpDoCopy(du.stored_password, wp.path + '_pw');
+            },
+            wpCopyLogin(wp) {
+                var du = (this.wpCredentials[wp.path]?.admin_users || []).find(function(u) { return u.is_default_login; });
+                if (!du) return;
+                var info = 'Login URL: ' + (wp.login_url || (wp.url + '/wp-login.php')) + '\nUsername: ' + (du.user_login || du.username) + '\nPassword: ' + (du.stored_password || 'N/A');
+                this.wpDoCopy(info, wp.path + '_login');
+            },
+            wpCopyUserPw(wp, user) {
+                this.wpDoCopy(user.stored_password, wp.path + '-' + (user.user_login || user.username) + '_pw');
+            },
+            wpCopyUserLogin(wp, user) {
+                var info = 'Login URL: ' + (wp.login_url || (wp.url + '/wp-login.php')) + '\nUsername: ' + (user.user_login || user.username) + '\nPassword: ' + (user.stored_password || 'N/A');
+                this.wpDoCopy(info, wp.path + '-' + (user.user_login || user.username) + '_login');
             },
             wpFormatDate(s) {if(!s)return'-';try{var d=new Date(s+(s.includes('T')?'':'Z'));return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})+' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});}catch(e){return s;}}
         };
@@ -194,14 +224,14 @@ document.addEventListener('alpine:init', function() {
                                         <span class="font-mono text-gray-700 cursor-pointer hover:text-gray-900" @click="show=!show"
                                             x-text="show ? ((wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login) || {}).stored_password || '' : String.fromCharCode(8226).repeat(8)"></span>
                                     </span>
-                                    <button @click="var du=(wpCredentials[wp.path]?.admin_users||[]).find(u=>u.is_default_login);if(du){navigator.clipboard.writeText(du.stored_password).then(()=>{wpCopyDone[wp.path+'_pw']=true;setTimeout(()=>{wpCopyDone[wp.path+'_pw']=false},2000)})}"
+                                    <button @click="wpCopyPw(wp)"
                                         class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border transition-colors"
                                         :class="wpCopyDone[wp.path+'_pw'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-blue-600 bg-blue-50 border-blue-200 hover:bg-blue-100'">
                                         <svg x-show="!wpCopyDone[wp.path+'_pw']" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                                         <svg x-show="wpCopyDone[wp.path+'_pw']" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                                         <span x-text="wpCopyDone[wp.path+'_pw'] ? 'Password Copied!' : 'Copy Password'"></span>
                                     </button>
-                                    <button @click="var du=(wpCredentials[wp.path]?.admin_users||[]).find(u=>u.is_default_login);if(du){var info='Login URL: '+(wp.login_url||(wp.url+'/wp-login.php'))+'\nUsername: '+(du.user_login||du.username)+'\nPassword: '+du.stored_password;navigator.clipboard.writeText(info).then(()=>{wpCopyDone[wp.path+'_login']=true;setTimeout(()=>{wpCopyDone[wp.path+'_login']=false},2000)})}"
+                                    <button @click="wpCopyLogin(wp)"
                                         class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border transition-colors"
                                         :class="wpCopyDone[wp.path+'_login'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-purple-600 bg-purple-50 border-purple-200 hover:bg-purple-100'">
                                         <svg x-show="!wpCopyDone[wp.path+'_login']" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
@@ -298,14 +328,14 @@ document.addEventListener('alpine:init', function() {
                                                                 </button>
                                                             </div>
                                                             <div class="flex items-center gap-1.5 mt-1">
-                                                                <button @click="var k=wp.path+'-'+(user.user_login||user.username)+'_pw';navigator.clipboard.writeText(user.stored_password).then(()=>{wpCopyDone[k]=true;setTimeout(()=>{wpCopyDone[k]=false},2000)})"
+                                                                <button @click="wpCopyUserPw(wp, user)"
                                                                     class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors"
                                                                     :class="wpCopyDone[wp.path+'-'+(user.user_login||user.username)+'_pw'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100'">
                                                                     <svg x-show="!wpCopyDone[wp.path+'-'+(user.user_login||user.username)+'_pw']" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                                                                     <svg x-show="wpCopyDone[wp.path+'-'+(user.user_login||user.username)+'_pw']" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                                                                     <span x-text="wpCopyDone[wp.path+'-'+(user.user_login||user.username)+'_pw'] ? 'Copied!' : 'Copy PW'"></span>
                                                                 </button>
-                                                                <button @click="var k=wp.path+'-'+(user.user_login||user.username)+'_login';var info='Login URL: '+(wp.login_url||(wp.url+'/wp-login.php'))+'\nUsername: '+(user.user_login||user.username)+'\nPassword: '+user.stored_password;navigator.clipboard.writeText(info).then(()=>{wpCopyDone[k]=true;setTimeout(()=>{wpCopyDone[k]=false},2000)})"
+                                                                <button @click="wpCopyUserLogin(wp, user)"
                                                                     class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors"
                                                                     :class="wpCopyDone[wp.path+'-'+(user.user_login||user.username)+'_login'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-gray-500 bg-gray-50 border-gray-200 hover:bg-gray-100'">
                                                                     <svg x-show="!wpCopyDone[wp.path+'-'+(user.user_login||user.username)+'_login']" class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
