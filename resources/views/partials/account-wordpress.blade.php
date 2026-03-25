@@ -300,27 +300,15 @@
                                 </template>
                             </div>
 
-                            {{-- Default Login URL (before credentials loaded) --}}
-                            <template x-if="!wpCredentials[wp.path]">
-                                <div class="flex items-center gap-2 mb-3 text-xs">
-                                    <a :href="wp.url + '/wp-login.php'" target="_blank" class="text-gray-400 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
-                                        <span x-text="wp.url + '/wp-login.php'"></span>
-                                        <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                                    </a>
-                                    <span class="text-gray-300">(default)</span>
-                                </div>
-                            </template>
-
-                            {{-- Actual Login URL (after credentials loaded, uses login_url from API) --}}
-                            <template x-if="wpCredentials[wp.path] && wpCredentials[wp.path].login_info && wpCredentials[wp.path].login_info.url">
+                            {{-- Login URL (from scan data — always available immediately) --}}
+                            <template x-if="wp.login_url">
                                 <div class="flex flex-wrap items-center gap-3 mb-3 text-xs">
-                                    <a :href="wpCredentials[wp.path].login_info.url" target="_blank" class="text-gray-500 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
-                                        <span x-text="wpCredentials[wp.path].login_info.url"></span>
+                                    <a :href="wp.login_url" target="_blank" class="text-gray-500 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
+                                        <span x-text="wp.login_url"></span>
                                         <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                                     </a>
-                                    {{-- Modified login URL indicator --}}
-                                    <template x-if="wpCredentials[wp.path].login_info.is_modified">
-                                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-700">Modified from default</span>
+                                    <template x-if="wp.login_url && !wp.login_url.includes('/wp-login.php')">
+                                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-700">Custom login URL</span>
                                     </template>
                                 </div>
                             </template>
@@ -399,7 +387,10 @@
                                                                 </button>
                                                             </div>
                                                         </template>
-                                                        <template x-if="!user.stored_password">
+                                                        <template x-if="!user.stored_password && user.is_default_login && wpCredentials[wp.path]?.stored_credentials?.password_encrypted">
+                                                            <span class="text-gray-400 text-xs italic">Encrypted (use Set Password)</span>
+                                                        </template>
+                                                        <template x-if="!user.stored_password && !(user.is_default_login && wpCredentials[wp.path]?.stored_credentials?.password_encrypted)">
                                                             <span class="text-gray-400 text-xs">-</span>
                                                         </template>
                                                     </td>

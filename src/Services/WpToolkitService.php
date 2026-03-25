@@ -160,6 +160,7 @@ class WpToolkitService
                 'name'        => $item['name'] ?? null,
                 'path'        => $path,
                 'url'         => $item['siteUrl'] ?? $item['url'] ?? null,
+                'login_url'   => $item['loginUrl'] ?? null,
                 'version'     => $item['version'] ?? $item['wpVersion'] ?? null,
                 'php_version' => $item['phpVersion'] ?? null,
                 'status'      => $item['status'] ?? $item['state'] ?? null,
@@ -316,15 +317,16 @@ class WpToolkitService
             }
 
             $installs[] = [
-                'id'         => $item['id'] ?? null,
-                'name'       => $item['name'] ?? null,
-                'path'       => $path,
-                'url'        => $item['siteUrl'] ?? $item['url'] ?? null,
-                'version'    => $item['version'] ?? $item['wpVersion'] ?? null,
+                'id'          => $item['id'] ?? null,
+                'name'        => $item['name'] ?? null,
+                'path'        => $path,
+                'url'         => $item['siteUrl'] ?? $item['url'] ?? null,
+                'login_url'   => $item['loginUrl'] ?? null,
+                'version'     => $item['version'] ?? $item['wpVersion'] ?? null,
                 'php_version' => $item['phpVersion'] ?? null,
-                'status'     => $item['status'] ?? $item['state'] ?? null,
+                'status'      => $item['status'] ?? $item['state'] ?? null,
                 'auto_update' => $item['autoUpdate'] ?? null,
-                'admin_user' => $item['adminLogin'] ?? $item['admin_login'] ?? $item['adminUser'] ?? $item['admin_user'] ?? null,
+                'admin_user'  => $item['adminLogin'] ?? $item['admin_login'] ?? $item['adminUser'] ?? $item['admin_user'] ?? null,
             ];
         }
 
@@ -692,7 +694,9 @@ PHP;
             ];
         }
 
-        $loginUrl = rtrim($siteUrl, '/') . '/wp-login.php?hws_login_token=' . $token;
+        // Use site root URL — the mu-plugin hooks into 'init' which fires on ANY page
+        // Do NOT use /wp-login.php since custom login URLs (e.g. /hexa-admin/) may block it
+        $loginUrl = rtrim($siteUrl, '/') . '/?hws_login_token=' . $token;
 
         $this->generic->log('info', '[WpToolkit] WordPress login URL generated', [
             'site' => $siteUrl, 'wp_user' => $wpUser, 'ttl' => $ttl,
@@ -826,78 +830,69 @@ PHP;
         $dbCreds = null;
         $loginInfo = null;
 
-        // Method 1: wp-toolkit --info (stored admin credentials + login URL)
-        $cmd = "wp-toolkit --info -instance-id {$escapedId} -format json 2>&1";
-        $output = trim($connection->exec($cmd));
-        $raw .= "wp-toolkit --info: " . mb_substr($output, 0, 3000) . "\n";
+        // Method 1: Query WP Toolkit SQLite database directly for stored credentials
+        // The CLI (wp-toolkit --info) does NOT expose admin login/password — they're only in the SQLite DB
+        $sqliteDb = '/usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3';
+        $cmd = "sqlite3 {$sqliteDb} \"SELECT name, value FROM InstanceProperties WHERE instanceId = {$installId} AND (name = 'login' OR name = 'password' OR name = 'adminLoginLink' OR name = 'admin_email')\" 2>&1";
+        $sqliteOutput = trim($connection->exec($cmd));
+        $raw .= "sqlite3 InstanceProperties: " . $sqliteOutput . "\n";
 
-        $this->generic->log('info', '[WpToolkit] wp-toolkit --info raw output', [
+        $this->generic->log('info', '[WpToolkit] SQLite InstanceProperties', [
             'install_id' => $installId,
-            'output'     => mb_substr($output, 0, 2000),
+            'output'     => $sqliteOutput,
         ]);
 
-        // Try to parse JSON from output — don't filter on 'Error' string, just try to find JSON
+        $adminLogin = null;
+        $adminPass = null;
+        $adminEmail = null;
+        $adminLoginLink = null;
+
+        if ($sqliteOutput) {
+            foreach (explode("\n", $sqliteOutput) as $line) {
+                $parts = explode('|', $line, 2);
+                if (count($parts) === 2) {
+                    $name = trim($parts[0]);
+                    $value = trim($parts[1]);
+                    if ($name === 'login') $adminLogin = $value;
+                    if ($name === 'password') $adminPass = $value;
+                    if ($name === 'admin_email') $adminEmail = $value;
+                    if ($name === 'adminLoginLink') $adminLoginLink = $value;
+                }
+            }
+        }
+
+        // Password is AES-256-GCM encrypted in SQLite — we cannot decrypt it
+        // But the login username IS plaintext and is what we need for auto-login
+        $passwordEncrypted = false;
+        if ($adminPass && str_starts_with($adminPass, '$aes-256-gcm$')) {
+            $passwordEncrypted = true;
+            $adminPass = null; // Can't use encrypted password
+        }
+
+        $raw .= "SQLITE_CREDS: login=" . ($adminLogin ?? 'NULL') . " pass=" . ($passwordEncrypted ? 'ENCRYPTED' : ($adminPass ? 'YES' : 'NULL')) . "\n";
+
+        if ($adminLogin) {
+            $credentials = [
+                'username'           => $adminLogin,
+                'password'           => $adminPass,
+                'email'              => $adminEmail,
+                'password_encrypted' => $passwordEncrypted,
+            ];
+        }
+
+        // Method 2: wp-toolkit --info JSON for loginUrl and siteUrl
+        $cmd = "wp-toolkit --info -instance-id {$escapedId} -format json 2>&1";
+        $output = trim($connection->exec($cmd));
+
         if ($output) {
             $info = $this->extractJsonObject($output);
-
             if ($info) {
-                $raw .= "PARSED_KEYS: " . implode(', ', array_keys($info)) . "\n";
+                $siteUrl = $info['siteUrl'] ?? null;
+                $wptLoginUrl = $info['loginUrl'] ?? null;
 
-                $this->generic->log('info', '[WpToolkit] wp-toolkit --info parsed', [
-                    'keys' => array_keys($info),
-                ]);
-
-                // Admin credentials — try every possible field name
-                $adminLogin = null;
-                $adminPass = null;
-                $adminEmail = null;
-
-                foreach ($info as $key => $val) {
-                    $lk = strtolower($key);
-                    if (!$adminLogin && is_string($val) && (
-                        $lk === 'adminlogin' || $lk === 'admin_login' ||
-                        $lk === 'adminuser' || $lk === 'admin_user' ||
-                        $lk === 'adminname' || $lk === 'admin_name'
-                    )) {
-                        $adminLogin = $val;
-                    }
-                    if (!$adminPass && is_string($val) && (
-                        $lk === 'adminpassword' || $lk === 'admin_password' ||
-                        $lk === 'adminpass' || $lk === 'admin_pass' ||
-                        $lk === 'password'
-                    )) {
-                        $adminPass = $val;
-                    }
-                    if (!$adminEmail && is_string($val) && (
-                        $lk === 'adminemail' || $lk === 'admin_email' ||
-                        $lk === 'email'
-                    )) {
-                        $adminEmail = $val;
-                    }
-                }
-
-                // Set credentials if we found a login OR a password (don't require both)
-                if ($adminLogin || $adminPass) {
-                    $credentials = [
-                        'username' => $adminLogin,
-                        'password' => $adminPass,
-                        'email'    => $adminEmail,
-                    ];
-                }
-
-                $raw .= "CREDS: login=" . ($adminLogin ?? 'NULL') . " pass=" . ($adminPass ? 'YES(' . strlen($adminPass) . ')' : 'NULL') . "\n";
-
-                // Login URL from WP Toolkit (authoritative source)
-                $siteUrl = null;
-                $wptLoginUrl = null;
-                foreach ($info as $key => $val) {
-                    $lk = strtolower($key);
-                    if (!$siteUrl && is_string($val) && ($lk === 'siteurl' || $lk === 'site_url')) {
-                        $siteUrl = $val;
-                    }
-                    if (!$wptLoginUrl && is_string($val) && ($lk === 'loginurl' || $lk === 'login_url')) {
-                        $wptLoginUrl = $val;
-                    }
+                if (!$adminEmail && isset($info['admin_email'])) {
+                    $adminEmail = $info['admin_email'];
+                    if ($credentials) $credentials['email'] = $adminEmail;
                 }
 
                 if ($wptLoginUrl) {
@@ -914,12 +909,6 @@ PHP;
                         'default_url' => $defaultLogin,
                     ];
                 }
-            } else {
-                $raw .= "JSON_PARSE_FAILED\n";
-                $this->generic->log('warning', '[WpToolkit] wp-toolkit --info JSON parse failed', [
-                    'install_id' => $installId,
-                    'output'     => mb_substr($output, 0, 500),
-                ]);
             }
         }
 
