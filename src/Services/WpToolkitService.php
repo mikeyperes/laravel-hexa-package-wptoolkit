@@ -164,6 +164,7 @@ class WpToolkitService
                 'php_version' => $item['phpVersion'] ?? null,
                 'status'      => $item['status'] ?? $item['state'] ?? null,
                 'auto_update' => $item['autoUpdate'] ?? null,
+                'admin_user'  => $item['adminLogin'] ?? $item['admin_login'] ?? $item['adminUser'] ?? $item['admin_user'] ?? null,
                 'cpanel_user' => $cpanelUser,
             ];
         }
@@ -323,6 +324,7 @@ class WpToolkitService
                 'php_version' => $item['phpVersion'] ?? null,
                 'status'     => $item['status'] ?? $item['state'] ?? null,
                 'auto_update' => $item['autoUpdate'] ?? null,
+                'admin_user' => $item['adminLogin'] ?? $item['admin_login'] ?? $item['adminUser'] ?? $item['admin_user'] ?? null,
             ];
         }
 
