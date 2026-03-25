@@ -41,6 +41,8 @@
                 this.wpInstalls = d.installs || [];
                 this.wpLoading = false;
                 this.wpOpen = true;
+                // Auto-fetch credentials for each install
+                (this.wpInstalls || []).forEach(wp => this.wpFetchCreds(wp));
             }).catch(e => {
                 this.wpLoading = false;
                 this.wpScanError = 'Failed to scan: ' + (e.message || 'Unknown error');
@@ -299,8 +301,13 @@
                                         <tbody>
                                             <template x-for="(user, uIdx) in (wpCredentials[wp.path].admin_users || wpCredentials[wp.path].credentials?.users || [])" :key="user.username || user.user_login || uIdx">
                                                 <tr class="border-t border-gray-100">
-                                                    {{-- Username --}}
-                                                    <td class="px-3 py-2 font-mono text-gray-900 break-words" x-text="user.username || user.user_login"></td>
+                                                    {{-- Username + default marker --}}
+                                                    <td class="px-3 py-2 font-mono text-gray-900 break-words">
+                                                        <span x-text="user.username || user.user_login"></span>
+                                                        <template x-if="wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login)">
+                                                            <span class="ml-1 inline-block px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded">DEFAULT</span>
+                                                        </template>
+                                                    </td>
 
                                                     {{-- Email --}}
                                                     <td class="px-3 py-2 text-gray-600 break-words" x-text="user.email || user.user_email || '-'"></td>
@@ -312,7 +319,11 @@
                                                     <td class="px-3 py-2">
                                                         <div class="flex items-center gap-1.5">
                                                             <span class="font-mono text-gray-700 break-words"
-                                                                x-text="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)] ? (user.password || user.user_pass || '(hashed)') : String.fromCharCode(8226).repeat(8)"></span>
+                                                                x-text="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)]
+                                                                    ? (wpCredentials[wp.path]?.stored_credentials?.password && (wpCredentials[wp.path]?.stored_credentials?.username === (user.username || user.user_login))
+                                                                        ? wpCredentials[wp.path].stored_credentials.password
+                                                                        : (user.password || '(no plaintext available — use Set Password)'))
+                                                                    : String.fromCharCode(8226).repeat(8)"></span>
                                                             <button @click="wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)] = !wpPasswordVisible[wp.path + '-' + (user.username || user.user_login)]"
                                                                 class="text-gray-400 hover:text-gray-600 shrink-0" title="Toggle password visibility">
                                                                 {{-- Eye open icon --}}
@@ -401,9 +412,33 @@
 
                         {{-- Reset Result Banner --}}
                         <template x-if="wpResetResult">
-                            <div class="rounded-lg px-4 py-3 text-sm font-medium mb-4"
-                                :class="wpResetResult.success ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'">
-                                <span x-text="wpResetResult.message"></span>
+                            <div class="mb-4">
+                                <div class="rounded-lg px-4 py-3 text-sm font-medium"
+                                    :class="wpResetResult.success ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'">
+                                    <template x-if="wpResetResult.success">
+                                        <div>
+                                            <p class="mb-2">Password reset successfully!</p>
+                                            <p class="font-mono text-sm bg-white border rounded px-3 py-2 text-gray-900 break-all" x-text="wpResetResult.password"></p>
+                                            <div class="flex gap-2 mt-3">
+                                                <button @click="navigator.clipboard.writeText(wpResetResult.password)" class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded hover:bg-blue-100 border border-blue-200">
+                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                    Copy Password
+                                                </button>
+                                                <button @click="
+                                                    var loginUrl = wpResetForm.wpUrl ? wpResetForm.wpUrl + '/wp-login.php' : 'N/A';
+                                                    var info = 'Login URL: ' + loginUrl + '\nUsername: ' + wpResetForm.username + '\nPassword: ' + wpResetResult.password;
+                                                    navigator.clipboard.writeText(info);
+                                                " class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 rounded hover:bg-purple-100 border border-purple-200">
+                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                    Copy All Login Info
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template x-if="!wpResetResult.success">
+                                        <span x-text="wpResetResult.message"></span>
+                                    </template>
+                                </div>
                             </div>
                         </template>
 
