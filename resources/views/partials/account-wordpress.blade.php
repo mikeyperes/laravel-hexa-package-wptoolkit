@@ -205,66 +205,6 @@
             </template>
         </h2>
         <div class="flex items-center gap-3">
-            {{-- cPanel Login --}}
-            @if(Route::has('wptoolkit.cpanel-login'))
-            <button @click.stop="
-                var btn = $event.currentTarget;
-                btn.disabled = true;
-                btn.querySelector('.cp-icon').classList.add('hidden');
-                btn.querySelector('.cp-spin').classList.remove('hidden');
-                fetch('{{ route('wptoolkit.cpanel-login') }}', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
-                    body: JSON.stringify({ server_id: {{ $server->id }}, username: '{{ $account->username }}' })
-                }).then(r => r.json()).then(d => {
-                    btn.disabled = false;
-                    btn.querySelector('.cp-icon').classList.remove('hidden');
-                    btn.querySelector('.cp-spin').classList.add('hidden');
-                    if (d.url) window.open(d.url, '_blank');
-                    else alert('cPanel login failed: ' + (d.error || 'no URL'));
-                }).catch(e => {
-                    btn.disabled = false;
-                    btn.querySelector('.cp-icon').classList.remove('hidden');
-                    btn.querySelector('.cp-spin').classList.add('hidden');
-                    alert('cPanel login failed: ' + e.message);
-                });
-            " class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-orange-600 bg-orange-50 rounded-lg hover:bg-orange-100 border border-orange-200 disabled:opacity-50" title="Open cPanel">
-                <svg class="w-3.5 h-3.5 cp-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                <svg class="w-3.5 h-3.5 cp-spin hidden animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                cPanel
-            </button>
-            @endif
-
-            {{-- WHM Reseller Login --}}
-            @if(Route::has('wptoolkit.whm-reseller-login'))
-            <button @click.stop="
-                var btn = $event.currentTarget;
-                btn.disabled = true;
-                btn.querySelector('.whm-icon').classList.add('hidden');
-                btn.querySelector('.whm-spin').classList.remove('hidden');
-                fetch('{{ route('wptoolkit.whm-reseller-login') }}', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content, 'Accept': 'application/json' },
-                    body: JSON.stringify({ server_id: {{ $server->id }}, username: '{{ $account->username }}' })
-                }).then(r => r.json()).then(d => {
-                    btn.disabled = false;
-                    btn.querySelector('.whm-icon').classList.remove('hidden');
-                    btn.querySelector('.whm-spin').classList.add('hidden');
-                    if (d.url) window.open(d.url, '_blank');
-                    else alert('WHM login failed: ' + (d.error || 'no URL'));
-                }).catch(e => {
-                    btn.disabled = false;
-                    btn.querySelector('.whm-icon').classList.remove('hidden');
-                    btn.querySelector('.whm-spin').classList.add('hidden');
-                    alert('WHM login failed: ' + e.message);
-                });
-            " class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 border border-red-200 disabled:opacity-50" title="Open WHM Reseller">
-                <svg class="w-3.5 h-3.5 whm-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                <svg class="w-3.5 h-3.5 whm-spin hidden animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                WHM
-            </button>
-            @endif
-
             {{-- Scan button (stop propagation so it doesn't toggle collapse) --}}
             <button @click.stop="wpScan()" :disabled="wpLoading"
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 border border-blue-200 disabled:opacity-50">
