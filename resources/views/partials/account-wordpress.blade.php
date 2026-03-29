@@ -529,6 +529,12 @@ document.addEventListener('alpine:init', function() {
                                                     <svg x-show="wpTestRunning" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                                                     <span x-text="wpTestRunning ? 'Testing...' : 'Test Login'"></span>
                                                 </button>
+                                                <button @click="wpAutoLogin({path:wpResetForm.path,id:wpResetForm.installId,url:wpResetForm.wpUrl,login_url:(wpResetForm.wpUrl?wpResetForm.wpUrl+'/wp-login.php':null)}, wpResetForm.username)" :disabled="wpIsLogging({path:wpResetForm.path}, wpResetForm.username)"
+                                                    class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded hover:bg-green-100 border border-green-200 disabled:opacity-50">
+                                                    <svg x-show="!wpIsLogging({path:wpResetForm.path}, wpResetForm.username)" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+                                                    <svg x-show="wpIsLogging({path:wpResetForm.path}, wpResetForm.username)" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                                    <span x-text="wpIsLogging({path:wpResetForm.path}, wpResetForm.username) ? 'Logging in...' : 'Login'"></span>
+                                                </button>
                                             </div>
                                             {{-- Test Login Activity Log --}}
                                             <template x-if="wpTestLog.length > 0">
