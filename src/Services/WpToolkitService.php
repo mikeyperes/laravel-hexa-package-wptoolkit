@@ -453,24 +453,9 @@ class WpToolkitService
                 $adminUsers[0]['is_default_login'] = true;
             }
 
-        }
-
-        // Sort: default login first, then admins by name, then others by name
-        if ($adminUsers) {
+            // Sort: default login user always first
             usort($adminUsers, function ($a, $b) {
-                $aDefault = ($a['is_default_login'] ?? false) ? 1 : 0;
-                $bDefault = ($b['is_default_login'] ?? false) ? 1 : 0;
-                if ($aDefault !== $bDefault) return $bDefault <=> $aDefault;
-
-                $aRole = strtolower($a['role'] ?? $a['roles'] ?? '');
-                $bRole = strtolower($b['role'] ?? $b['roles'] ?? '');
-                $aAdmin = str_contains($aRole, 'admin') ? 1 : 0;
-                $bAdmin = str_contains($bRole, 'admin') ? 1 : 0;
-                if ($aAdmin !== $bAdmin) return $bAdmin <=> $aAdmin;
-
-                $aName = strtolower($a['user_login'] ?? $a['username'] ?? '');
-                $bName = strtolower($b['user_login'] ?? $b['username'] ?? '');
-                return $aName <=> $bName;
+                return ($b['is_default_login'] ?? false) <=> ($a['is_default_login'] ?? false);
             });
         }
 
@@ -561,10 +546,9 @@ class WpToolkitService
      * @param string    $wpPath   Full path to WordPress install
      * @param string    $username cPanel username
      * @param string    $wpUser   WordPress username to reset
-     * @param string|null $password User-provided password (generated server-side if null)
      * @return array{success: bool, password?: string, wp_user?: string, error?: string}
      */
-    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser, ?string $password = null): array
+    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser): array
     {
         $this->generic->log('info', '[WpToolkit] resetWordPressPassword starting', [
             'server'     => $server->name,
@@ -581,8 +565,8 @@ class WpToolkitService
         /** @var SSH2 $connection */
         $connection = $ssh['connection'];
 
-        // Use user-provided password or generate a random one
-        $newPassword = $password ?: bin2hex(random_bytes(12));
+        // Generate a random password
+        $newPassword = bin2hex(random_bytes(12));
 
         $escapedId = escapeshellarg((string) $installId);
         $escapedPath = escapeshellarg($wpPath);
@@ -594,31 +578,10 @@ class WpToolkitService
         $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
         $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
-        $success = str_contains($output, 'Success');
 
-        if (!$success) {
-            // Method 2: Direct wp-cli as cPanel user
-            $cmd = "sudo -u {$escapedUser} wp user update {$escapedWpUser} --user_pass={$escapedPass} --path={$escapedPath} 2>&1";
-            $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
-            $fallbackOutput = trim($connection->exec($cmd));
-            $output .= "\n---FALLBACK---\n" . $fallbackOutput;
-            $success = str_contains($fallbackOutput, 'Success');
-        }
-
-        if ($success) {
-            // Insert or replace WP Toolkit's stored credentials in SQLite so rescan shows the new password
-            // PK is (instanceId, name) — rows may not exist yet, so INSERT OR REPLACE
-            // Wrap entire SQL in escapeshellarg (single quotes) to prevent shell expansion of special chars
-            $sqliteDb = '/usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3';
-            $safePass = str_replace("'", "''", $newPassword);
-            $safeUser = str_replace("'", "''", $wpUser);
-            $sql1 = "INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$installId}, 'password', '{$safePass}');";
-            $sql2 = "INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$installId}, 'login', '{$safeUser}');";
-            $connection->exec('sqlite3 ' . $sqliteDb . ' ' . escapeshellarg($sql1) . ' 2>&1');
-            $connection->exec('sqlite3 ' . $sqliteDb . ' ' . escapeshellarg($sql2) . ' 2>&1');
-            $this->generic->log('info', '[WpToolkit] Stored credentials in SQLite', ['install_id' => $installId, 'wp_user' => $wpUser]);
-
+        if (str_contains($output, 'Success')) {
             $connection->disconnect();
+            $this->generic->log('info', '[WpToolkit] Password reset success via wp-toolkit');
             return [
                 'success'  => true,
                 'password' => $newPassword,
@@ -626,7 +589,22 @@ class WpToolkitService
             ];
         }
 
+        // Method 2: Direct wp-cli as cPanel user
+        $cmd = "sudo -u {$escapedUser} wp user update {$escapedWpUser} --user_pass={$escapedPass} --path={$escapedPath} 2>&1";
+        $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
+        $fallbackOutput = trim($connection->exec($cmd));
+        $output .= "\n---FALLBACK---\n" . $fallbackOutput;
+
         $connection->disconnect();
+
+        if (str_contains($fallbackOutput, 'Success')) {
+            $this->generic->log('info', '[WpToolkit] Password reset success via direct wp-cli');
+            return [
+                'success'  => true,
+                'password' => $newPassword,
+                'wp_user'  => $wpUser,
+            ];
+        }
 
         $this->generic->log('error', '[WpToolkit] Password reset failed', [
             'output' => mb_substr($output, 0, 500),
@@ -637,80 +615,6 @@ class WpToolkitService
             'error'      => 'Password reset failed. Output: ' . mb_substr($output, 0, 300),
             'raw_output' => $output,
         ];
-    }
-
-    /**
-     * Test a WordPress user's password by verifying it against the database via wp-cli.
-     *
-     * @param WhmServer $server    The WHM server
-     * @param int       $installId WP Toolkit install ID
-     * @param string    $wpPath    Full path to WordPress install
-     * @param string    $username  cPanel username
-     * @param string    $wpUser    WordPress username to test
-     * @param string    $password  Password to verify
-     * @return array{success: bool, steps: array, error?: string}
-     */
-    public function testWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser, string $password): array
-    {
-        $steps = [];
-        $ts = fn() => now()->format('H:i:s');
-
-        $steps[] = ['time' => $ts(), 'message' => 'Connecting to ' . $server->name . '...', 'status' => 'info'];
-
-        $ssh = $this->sshConnect($server);
-        if (!$ssh['success']) {
-            $steps[] = ['time' => $ts(), 'message' => 'SSH connection failed: ' . ($ssh['error'] ?? 'Unknown'), 'status' => 'error'];
-            return ['success' => false, 'steps' => $steps, 'error' => $ssh['error'] ?? 'SSH failed'];
-        }
-
-        /** @var \phpseclib3\Net\SSH2 $connection */
-        $connection = $ssh['connection'];
-        $steps[] = ['time' => $ts(), 'message' => 'SSH connected', 'status' => 'ok'];
-
-        $escapedPass = addslashes($password);
-        $escapedWpUser = addslashes($wpUser);
-        $phpSnippet = "echo wp_check_password('{$escapedPass}', get_user_by('login', '{$escapedWpUser}')->user_pass) ? 'WPTK_PASS_OK' : 'WPTK_PASS_FAIL';";
-
-        $escapedId = escapeshellarg((string) $installId);
-        $escapedPath = escapeshellarg($wpPath);
-        $escapedUser = escapeshellarg($username);
-        $escapedPhp = escapeshellarg($phpSnippet);
-
-        // Method 1: wp-toolkit --wp-cli
-        $steps[] = ['time' => $ts(), 'message' => 'Verifying credentials for ' . $wpUser . '...', 'status' => 'info'];
-        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- eval {$escapedPhp} 2>&1";
-        $output = trim($connection->exec($cmd));
-
-        if (str_contains($output, 'WPTK_PASS_OK')) {
-            $connection->disconnect();
-            $steps[] = ['time' => $ts(), 'message' => 'Password verified successfully!', 'status' => 'ok'];
-            return ['success' => true, 'steps' => $steps];
-        }
-
-        if (str_contains($output, 'WPTK_PASS_FAIL')) {
-            $connection->disconnect();
-            $steps[] = ['time' => $ts(), 'message' => 'Password verification FAILED — wrong password', 'status' => 'error'];
-            return ['success' => false, 'steps' => $steps, 'error' => 'Password does not match'];
-        }
-
-        // Method 2: Direct wp-cli fallback
-        $steps[] = ['time' => $ts(), 'message' => 'wp-toolkit failed, trying direct wp-cli...', 'status' => 'info'];
-        $cmd = "sudo -u {$escapedUser} wp eval {$escapedPhp} --path={$escapedPath} 2>&1";
-        $fallbackOutput = trim($connection->exec($cmd));
-        $connection->disconnect();
-
-        if (str_contains($fallbackOutput, 'WPTK_PASS_OK')) {
-            $steps[] = ['time' => $ts(), 'message' => 'Password verified successfully!', 'status' => 'ok'];
-            return ['success' => true, 'steps' => $steps];
-        }
-
-        if (str_contains($fallbackOutput, 'WPTK_PASS_FAIL')) {
-            $steps[] = ['time' => $ts(), 'message' => 'Password verification FAILED — wrong password', 'status' => 'error'];
-            return ['success' => false, 'steps' => $steps, 'error' => 'Password does not match'];
-        }
-
-        $steps[] = ['time' => $ts(), 'message' => 'Could not verify: ' . mb_substr($output . ' | ' . $fallbackOutput, 0, 200), 'status' => 'error'];
-        return ['success' => false, 'steps' => $steps, 'error' => 'Verification command failed'];
     }
 
     /**
@@ -1234,5 +1138,246 @@ PHP;
                 'error'   => 'SSH connection failed: ' . $e->getMessage(),
             ];
         }
+    }
+
+    // ── WP-CLI Publishing Functions ─────────────────────
+
+    /**
+     * Create a WordPress post via wp-cli SSH.
+     *
+     * @param WhmServer $server
+     * @param int       $installId  WP Toolkit install ID
+     * @param string    $title      Post title
+     * @param string    $content    Post HTML content
+     * @param string    $status     publish|draft|future
+     * @param array     $categoryIds WP category IDs
+     * @param array     $tagIds     WP tag IDs
+     * @param string|null $date     ISO date for scheduled posts
+     * @return array{success: bool, message: string, data?: array}
+     */
+    public function wpCliCreatePost(WhmServer $server, int $installId, string $title, string $content, string $status = 'draft', array $categoryIds = [], array $tagIds = [], ?string $date = null): array
+    {
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+
+        // Write content to temp file on server (avoids shell escaping issues with HTML)
+        $tmpFile = '/tmp/hexa_wp_post_' . uniqid() . '.html';
+        $connection->exec('cat > ' . escapeshellarg($tmpFile) . ' << \'HEXAEOF\'' . "\n" . $content . "\nHEXAEOF");
+
+        // Build wp post create command
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post create"
+            . " --post_title=" . escapeshellarg($title)
+            . " --post_status=" . escapeshellarg($status)
+            . " --post_content=\"$(cat " . escapeshellarg($tmpFile) . ")\""
+            . " --porcelain";
+
+        if (!empty($categoryIds)) {
+            $cmd .= " --post_category=" . escapeshellarg(implode(',', $categoryIds));
+        }
+        if (!empty($tagIds)) {
+            $cmd .= " --tags_input=" . escapeshellarg(implode(',', $tagIds));
+        }
+        if ($date && $status === 'future') {
+            $cmd .= " --post_date=" . escapeshellarg($date);
+        }
+
+        $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status]);
+
+        $output = trim($connection->exec($cmd . ' 2>&1'));
+
+        // Cleanup temp file
+        $connection->exec('rm -f ' . escapeshellarg($tmpFile));
+
+        // --porcelain returns just the post ID
+        if (is_numeric($output)) {
+            $postId = (int) $output;
+            $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId]);
+            return [
+                'success' => true,
+                'message' => "Post created (ID: {$postId})",
+                'data'    => ['post_id' => $postId],
+            ];
+        }
+
+        $this->generic->log('error', '[WpToolkit] wpCliCreatePost failed', ['output' => $output]);
+        return ['success' => false, 'message' => 'wp-cli post create failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+    }
+
+    /**
+     * Upload media to WordPress via wp-cli SSH (downloads URL to server, imports it).
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param string    $imageUrl   URL of the image to upload
+     * @param string    $filename   Desired filename
+     * @param string    $altText    Alt text for the image
+     * @return array{success: bool, message: string, data?: array}
+     */
+    public function wpCliUploadMedia(WhmServer $server, int $installId, string $imageUrl, string $filename = '', string $altText = ''): array
+    {
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+
+        // Import directly from URL (wp-cli downloads it internally, avoids sandbox path issues)
+        $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- media import " . escapeshellarg($imageUrl) . $titleArg . " --porcelain 2>&1";
+        $rawOutput = trim($connection->exec($cmd));
+
+        // Parse: filter out PHP warnings/deprecations, find the numeric media ID
+        $output = '';
+        foreach (explode("\n", $rawOutput) as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+            if (str_starts_with($line, 'Deprecated:') || str_starts_with($line, 'Warning:') || str_starts_with($line, 'Notice:') || str_starts_with($line, 'PHP ')) continue;
+            if (is_numeric($line)) {
+                $output = $line;
+                break;
+            }
+        }
+
+        if (is_numeric($output)) {
+            $mediaId = (int) $output;
+
+            // Set alt text if provided
+            if ($altText) {
+                $altCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post meta update {$mediaId} _wp_attachment_image_alt " . escapeshellarg($altText) . " 2>&1";
+                $connection->exec($altCmd);
+            }
+
+            // Get the media URL
+            $urlCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post list --post_type=attachment --post__in={$mediaId} --field=guid --format=csv 2>&1";
+            $mediaUrl = trim($connection->exec($urlCmd));
+            // Clean up CSV header if present
+            $lines = array_filter(explode("\n", $mediaUrl), fn($l) => !empty(trim($l)) && trim($l) !== 'guid');
+            $mediaUrl = trim($lines[array_key_first($lines)] ?? '');
+
+            $this->generic->log('info', '[WpToolkit] Media uploaded', ['media_id' => $mediaId, 'url' => $mediaUrl]);
+            return [
+                'success' => true,
+                'message' => "Media uploaded (ID: {$mediaId})",
+                'data'    => ['media_id' => $mediaId, 'media_url' => $mediaUrl],
+            ];
+        }
+
+        $this->generic->log('error', '[WpToolkit] wpCliUploadMedia failed', ['output' => $output]);
+        return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+    }
+
+    /**
+     * Create or get a WordPress category via wp-cli SSH.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param string    $name Category name
+     * @return array{success: bool, term_id?: int, message: string}
+     */
+    public function wpCliCreateCategory(WhmServer $server, int $installId, string $name): array
+    {
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+
+        // Check if category exists first
+        $checkCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- term list category --field=term_id --name=" . escapeshellarg($name) . " --format=csv 2>&1";
+        $existing = trim($connection->exec($checkCmd));
+        $lines = array_filter(explode("\n", $existing), fn($l) => is_numeric(trim($l)));
+        if (!empty($lines)) {
+            $termId = (int) trim($lines[array_key_first($lines)]);
+            return ['success' => true, 'term_id' => $termId, 'message' => "Category exists (ID: {$termId})"];
+        }
+
+        // Create it
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- term create category " . escapeshellarg($name) . " --porcelain 2>&1";
+        $output = trim($connection->exec($cmd));
+
+        if (is_numeric($output)) {
+            return ['success' => true, 'term_id' => (int) $output, 'message' => "Category created (ID: {$output})"];
+        }
+
+        return ['success' => false, 'message' => 'Failed to create category: ' . \Illuminate\Support\Str::limit($output, 200)];
+    }
+
+    /**
+     * Create or get a WordPress tag via wp-cli SSH.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param string    $name Tag name
+     * @return array{success: bool, term_id?: int, message: string}
+     */
+    public function wpCliCreateTag(WhmServer $server, int $installId, string $name): array
+    {
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+
+        // Check if tag exists
+        $checkCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- term list post_tag --field=term_id --name=" . escapeshellarg($name) . " --format=csv 2>&1";
+        $existing = trim($connection->exec($checkCmd));
+        $lines = array_filter(explode("\n", $existing), fn($l) => is_numeric(trim($l)));
+        if (!empty($lines)) {
+            $termId = (int) trim($lines[array_key_first($lines)]);
+            return ['success' => true, 'term_id' => $termId, 'message' => "Tag exists (ID: {$termId})"];
+        }
+
+        // Create it
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- term create post_tag " . escapeshellarg($name) . " --porcelain 2>&1";
+        $output = trim($connection->exec($cmd));
+
+        if (is_numeric($output)) {
+            return ['success' => true, 'term_id' => (int) $output, 'message' => "Tag created (ID: {$output})"];
+        }
+
+        return ['success' => false, 'message' => 'Failed to create tag: ' . \Illuminate\Support\Str::limit($output, 200)];
+    }
+
+    /**
+     * Test write permissions on a WordPress install via wp-cli SSH.
+     * Creates and immediately deletes a test post.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @return array{success: bool, message: string}
+     */
+    public function wpCliTestWriteAccess(WhmServer $server, int $installId): array
+    {
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+
+        // Create a test post
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post create --post_title='Hexa Write Test' --post_status=draft --porcelain 2>&1";
+        $output = trim($connection->exec($cmd));
+
+        if (is_numeric($output)) {
+            $postId = (int) $output;
+            // Delete it immediately
+            $connection->exec("wp-toolkit --wp-cli -instance-id {$escapedId} -- post delete {$postId} --force 2>&1");
+            return ['success' => true, 'message' => 'Write access confirmed — test post created and deleted.'];
+        }
+
+        return ['success' => false, 'message' => 'Write test failed: ' . \Illuminate\Support\Str::limit($output, 200)];
     }
 }
