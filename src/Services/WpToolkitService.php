@@ -608,10 +608,14 @@ class WpToolkitService
         if ($success) {
             // Insert or replace WP Toolkit's stored credentials in SQLite so rescan shows the new password
             // PK is (instanceId, name) — rows may not exist yet, so INSERT OR REPLACE
+            // Wrap entire SQL in escapeshellarg (single quotes) to prevent shell expansion of special chars
             $sqliteDb = '/usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3';
-            $escapedNewPass = escapeshellarg($newPassword);
-            $connection->exec("sqlite3 {$sqliteDb} \"INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$escapedId}, 'password', {$escapedNewPass})\" 2>&1");
-            $connection->exec("sqlite3 {$sqliteDb} \"INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$escapedId}, 'login', {$escapedWpUser})\" 2>&1");
+            $safePass = str_replace("'", "''", $newPassword);
+            $safeUser = str_replace("'", "''", $wpUser);
+            $sql1 = "INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$installId}, 'password', '{$safePass}');";
+            $sql2 = "INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$installId}, 'login', '{$safeUser}');";
+            $connection->exec('sqlite3 ' . $sqliteDb . ' ' . escapeshellarg($sql1) . ' 2>&1');
+            $connection->exec('sqlite3 ' . $sqliteDb . ' ' . escapeshellarg($sql2) . ' 2>&1');
             $this->generic->log('info', '[WpToolkit] Stored credentials in SQLite', ['install_id' => $installId, 'wp_user' => $wpUser]);
 
             $connection->disconnect();
