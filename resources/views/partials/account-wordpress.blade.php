@@ -55,11 +55,17 @@ document.addEventListener('alpine:init', function() {
                     this.wpLoginUrls[key]='ERROR: '+(e.message||'Unknown error');
                 });
             },
+            wpHasLoginUser(wp) {
+                var users=this.wpCredentials[wp.path]?.admin_users||[];
+                for(var i=0;i<users.length;i++){if(users[i].is_default_login)return true;}
+                if(this.wpCredentials[wp.path]?.stored_credentials?.username)return true;
+                return false;
+            },
             wpBestLoginUser(wp) {
                 var users=this.wpCredentials[wp.path]?.admin_users||[];
                 for(var i=0;i<users.length;i++){if(users[i].is_default_login)return users[i].user_login||users[i].username;}
                 if(this.wpCredentials[wp.path]?.stored_credentials?.username)return this.wpCredentials[wp.path].stored_credentials.username;
-                return wp.admin_user||'admin';
+                return null;
             },
             wpIsLogging(wp, wpUser) { return this.wpAutoLogging[wp.path+'::'+wpUser]===true; },
             wpOpenReset(wp, user) {
@@ -267,13 +273,19 @@ document.addEventListener('alpine:init', function() {
                                     <span x-text="wpCredLoading[wp.path] ? 'Loading...' : 'Show Credentials'"></span>
                                 </button>
 
-                                {{-- Auto Login (uses best known username) --}}
-                                <button @click="wpAutoLogin(wp, wpBestLoginUser(wp))" :disabled="wpIsLogging(wp, wpBestLoginUser(wp))"
-                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 border border-green-200 disabled:opacity-50">
-                                    <svg x-show="!wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
-                                    <svg x-show="wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                    <span x-text="wpIsLogging(wp, wpBestLoginUser(wp)) ? 'Logging in...' : 'Auto Login'"></span>
-                                </button>
+                                {{-- Auto Login (only when a real default login user is detected) --}}
+                                <template x-if="wpHasLoginUser(wp)">
+                                    <button @click="wpAutoLogin(wp, wpBestLoginUser(wp))" :disabled="wpIsLogging(wp, wpBestLoginUser(wp))"
+                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 border border-green-200 disabled:opacity-50">
+                                        <svg x-show="!wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+                                        <svg x-show="wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                        <span x-text="wpIsLogging(wp, wpBestLoginUser(wp)) ? 'Logging in...' : 'Auto Login'"></span>
+                                    </button>
+                                </template>
+                                {{-- No default login detected message --}}
+                                <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error && !wpHasLoginUser(wp)">
+                                    <span class="text-xs text-gray-400 italic">No default admin detected — use per-user login below</span>
+                                </template>
                             </div>
 
                             {{-- User Filter (shown only when credentials are loaded and there are users) --}}
