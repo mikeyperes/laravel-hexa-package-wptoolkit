@@ -546,9 +546,10 @@ class WpToolkitService
      * @param string    $wpPath   Full path to WordPress install
      * @param string    $username cPanel username
      * @param string    $wpUser   WordPress username to reset
+     * @param string|null $password User-provided password (generated server-side if null)
      * @return array{success: bool, password?: string, wp_user?: string, error?: string}
      */
-    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser): array
+    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser, ?string $password = null): array
     {
         $this->generic->log('info', '[WpToolkit] resetWordPressPassword starting', [
             'server'     => $server->name,
@@ -565,8 +566,8 @@ class WpToolkitService
         /** @var SSH2 $connection */
         $connection = $ssh['connection'];
 
-        // Generate a random password
-        $newPassword = bin2hex(random_bytes(12));
+        // Use user-provided password or generate a random one
+        $newPassword = $password ?: bin2hex(random_bytes(12));
 
         $escapedId = escapeshellarg((string) $installId);
         $escapedPath = escapeshellarg($wpPath);

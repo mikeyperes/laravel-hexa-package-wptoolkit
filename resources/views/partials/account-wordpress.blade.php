@@ -72,8 +72,9 @@ document.addEventListener('alpine:init', function() {
             },
             wpDoReset() {
                 if(!this.wpResetForm.password)return;this.wpResetForm.saving=true;this.wpResetResult=null;
-                fetch(cfg.routes.resetPassword, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:this.wpResetForm.installId,wp_path:this.wpResetForm.wpPath,username:cfg.username,wp_user:this.wpResetForm.username})})
-                .then(r=>r.json()).then(d=>{this.wpResetForm.saving=false;if(d.password){this.wpResetResult={success:true,password:d.password};}else{this.wpResetResult={success:false,message:d.error||d.message||'Failed'};}})
+                fetch(cfg.routes.resetPassword, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:this.wpResetForm.installId,wp_path:this.wpResetForm.wpPath,username:cfg.username,wp_user:this.wpResetForm.username,password:this.wpResetForm.password})})
+                .then(function(r){if(!r.ok){return r.text().then(function(t){try{var j=JSON.parse(t);throw new Error(j.error||j.message||'Server error ('+r.status+')');}catch(pe){if(pe.message&&!pe.message.includes('JSON'))throw pe;throw new Error('Server error ('+r.status+'): '+t.substring(0,200));}});}return r.json();})
+                .then(d=>{this.wpResetForm.saving=false;if(d.password){this.wpResetResult={success:true,password:d.password};}else{this.wpResetResult={success:false,message:d.error||d.message||'Failed'};}})
                 .catch(e=>{this.wpResetForm.saving=false;this.wpResetResult={success:false,message:'Request failed: '+(e.message||'Unknown error')};});
             },
             wpUserMatches(user) {
@@ -471,17 +472,29 @@ document.addEventListener('alpine:init', function() {
                                             <p class="mb-2">Password reset successfully!</p>
                                             <p class="font-mono text-sm bg-white border rounded px-3 py-2 text-gray-900 break-all" x-text="wpResetResult.password"></p>
                                             <div class="flex gap-2 mt-3">
-                                                <button @click="navigator.clipboard.writeText(wpResetResult.password)" class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded hover:bg-blue-100 border border-blue-200">
-                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                                                    Copy Password
+                                                <button @click="wpDoCopy(wpResetResult.password, 'reset_pw')" class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors"
+                                                    :class="wpCopyDone['reset_pw'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-200'">
+                                                    <template x-if="!wpCopyDone['reset_pw']">
+                                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                    </template>
+                                                    <template x-if="wpCopyDone['reset_pw']">
+                                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                    </template>
+                                                    <span x-text="wpCopyDone['reset_pw'] ? 'Copied!' : 'Copy Password'"></span>
                                                 </button>
                                                 <button @click="
                                                     var loginUrl = wpResetForm.wpUrl ? wpResetForm.wpUrl + '/wp-login.php' : 'N/A';
                                                     var info = 'Login URL: ' + loginUrl + '\nUsername: ' + wpResetForm.username + '\nPassword: ' + wpResetResult.password;
-                                                    navigator.clipboard.writeText(info);
-                                                " class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 rounded hover:bg-purple-100 border border-purple-200">
-                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                                                    Copy All Login Info
+                                                    wpDoCopy(info, 'reset_all');
+                                                " class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors"
+                                                    :class="wpCopyDone['reset_all'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-purple-700 bg-purple-50 hover:bg-purple-100 border-purple-200'">
+                                                    <template x-if="!wpCopyDone['reset_all']">
+                                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                                    </template>
+                                                    <template x-if="wpCopyDone['reset_all']">
+                                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                                    </template>
+                                                    <span x-text="wpCopyDone['reset_all'] ? 'Copied!' : 'Copy All Login Info'"></span>
                                                 </button>
                                             </div>
                                         </div>
