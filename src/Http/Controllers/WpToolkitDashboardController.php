@@ -163,6 +163,7 @@ class WpToolkitDashboardController extends Controller
             'wp_path'    => 'required|string',
             'username'   => 'required|string|max:255',
             'wp_user'    => 'required|string|max:255',
+            'password'   => 'nullable|string|min:8|max:255',
         ]);
 
         $server = WhmServer::findOrFail($request->input('server_id'));
@@ -172,7 +173,8 @@ class WpToolkitDashboardController extends Controller
             (int) $request->input('install_id'),
             $request->input('wp_path'),
             $request->input('username'),
-            $request->input('wp_user')
+            $request->input('wp_user'),
+            $request->input('password')
         );
 
         return response()->json($result);
