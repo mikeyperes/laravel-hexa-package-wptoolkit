@@ -619,6 +619,80 @@ class WpToolkitService
     }
 
     /**
+     * Test a WordPress user's password by verifying it against the database via wp-cli.
+     *
+     * @param WhmServer $server    The WHM server
+     * @param int       $installId WP Toolkit install ID
+     * @param string    $wpPath    Full path to WordPress install
+     * @param string    $username  cPanel username
+     * @param string    $wpUser    WordPress username to test
+     * @param string    $password  Password to verify
+     * @return array{success: bool, steps: array, error?: string}
+     */
+    public function testWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser, string $password): array
+    {
+        $steps = [];
+        $ts = fn() => now()->format('H:i:s');
+
+        $steps[] = ['time' => $ts(), 'message' => 'Connecting to ' . $server->name . '...', 'status' => 'info'];
+
+        $ssh = $this->sshConnect($server);
+        if (!$ssh['success']) {
+            $steps[] = ['time' => $ts(), 'message' => 'SSH connection failed: ' . ($ssh['error'] ?? 'Unknown'), 'status' => 'error'];
+            return ['success' => false, 'steps' => $steps, 'error' => $ssh['error'] ?? 'SSH failed'];
+        }
+
+        /** @var \phpseclib3\Net\SSH2 $connection */
+        $connection = $ssh['connection'];
+        $steps[] = ['time' => $ts(), 'message' => 'SSH connected', 'status' => 'ok'];
+
+        $escapedPass = addslashes($password);
+        $escapedWpUser = addslashes($wpUser);
+        $phpSnippet = "echo wp_check_password('{$escapedPass}', get_user_by('login', '{$escapedWpUser}')->user_pass) ? 'WPTK_PASS_OK' : 'WPTK_PASS_FAIL';";
+
+        $escapedId = escapeshellarg((string) $installId);
+        $escapedPath = escapeshellarg($wpPath);
+        $escapedUser = escapeshellarg($username);
+        $escapedPhp = escapeshellarg($phpSnippet);
+
+        // Method 1: wp-toolkit --wp-cli
+        $steps[] = ['time' => $ts(), 'message' => 'Verifying credentials for ' . $wpUser . '...', 'status' => 'info'];
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- eval {$escapedPhp} 2>&1";
+        $output = trim($connection->exec($cmd));
+
+        if (str_contains($output, 'WPTK_PASS_OK')) {
+            $connection->disconnect();
+            $steps[] = ['time' => $ts(), 'message' => 'Password verified successfully!', 'status' => 'ok'];
+            return ['success' => true, 'steps' => $steps];
+        }
+
+        if (str_contains($output, 'WPTK_PASS_FAIL')) {
+            $connection->disconnect();
+            $steps[] = ['time' => $ts(), 'message' => 'Password verification FAILED — wrong password', 'status' => 'error'];
+            return ['success' => false, 'steps' => $steps, 'error' => 'Password does not match'];
+        }
+
+        // Method 2: Direct wp-cli fallback
+        $steps[] = ['time' => $ts(), 'message' => 'wp-toolkit failed, trying direct wp-cli...', 'status' => 'info'];
+        $cmd = "sudo -u {$escapedUser} wp eval {$escapedPhp} --path={$escapedPath} 2>&1";
+        $fallbackOutput = trim($connection->exec($cmd));
+        $connection->disconnect();
+
+        if (str_contains($fallbackOutput, 'WPTK_PASS_OK')) {
+            $steps[] = ['time' => $ts(), 'message' => 'Password verified successfully!', 'status' => 'ok'];
+            return ['success' => true, 'steps' => $steps];
+        }
+
+        if (str_contains($fallbackOutput, 'WPTK_PASS_FAIL')) {
+            $steps[] = ['time' => $ts(), 'message' => 'Password verification FAILED — wrong password', 'status' => 'error'];
+            return ['success' => false, 'steps' => $steps, 'error' => 'Password does not match'];
+        }
+
+        $steps[] = ['time' => $ts(), 'message' => 'Could not verify: ' . mb_substr($output . ' | ' . $fallbackOutput, 0, 200), 'status' => 'error'];
+        return ['success' => false, 'steps' => $steps, 'error' => 'Verification command failed'];
+    }
+
+    /**
      * Generate a one-click WordPress admin login URL.
      *
      * Deploys a temporary mu-plugin that auto-authenticates and self-deletes

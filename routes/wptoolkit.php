@@ -10,6 +10,7 @@ Route::middleware(['web', 'auth'])->group(function () {
     Route::post('wp-toolkit/get-credentials', [WpToolkitDashboardController::class, 'getCredentials'])->name('wptoolkit.get-credentials');
     Route::post('wp-toolkit/wp-login', [WpToolkitDashboardController::class, 'wpLogin'])->name('wptoolkit.wp-login');
     Route::post('wp-toolkit/reset-password', [WpToolkitDashboardController::class, 'resetPassword'])->name('wptoolkit.reset-password');
+    Route::post('wp-toolkit/test-login', [WpToolkitDashboardController::class, 'testLogin'])->name('wptoolkit.test-login');
     Route::post('wp-toolkit/cpanel-login', [WpToolkitDashboardController::class, 'cpanelLogin'])->name('wptoolkit.cpanel-login');
     Route::post('wp-toolkit/whm-reseller-login', [WpToolkitDashboardController::class, 'whmResellerLogin'])->name('wptoolkit.whm-reseller-login');
 });

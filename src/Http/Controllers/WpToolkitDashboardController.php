@@ -181,6 +181,37 @@ class WpToolkitDashboardController extends Controller
     }
 
     /**
+     * AJAX: Test a WordPress user's password by verifying via wp-cli.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function testLogin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id'  => 'required|integer|exists:whm_servers,id',
+            'install_id' => 'required|integer',
+            'wp_path'    => 'required|string',
+            'username'   => 'required|string|max:255',
+            'wp_user'    => 'required|string|max:255',
+            'password'   => 'required|string|max:255',
+        ]);
+
+        $server = WhmServer::findOrFail($request->input('server_id'));
+
+        $result = $this->wpToolkit->testWordPressPassword(
+            $server,
+            (int) $request->input('install_id'),
+            $request->input('wp_path'),
+            $request->input('username'),
+            $request->input('wp_user'),
+            $request->input('password')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
      * AJAX: Generate one-click cPanel login URL.
      *
      * @param Request $request
