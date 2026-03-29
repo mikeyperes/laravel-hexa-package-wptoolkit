@@ -84,19 +84,10 @@ document.addEventListener('alpine:init', function() {
                     this.wpResetForm.saving=false;
                     if(d.password){
                         this.wpResetResult={success:true,password:d.password};
-                        // Update client-side credentials so table shows new password immediately
-                        var path=this.wpResetForm.path;
-                        var wpUser=this.wpResetForm.username;
-                        if(this.wpCredentials[path]&&this.wpCredentials[path].admin_users){
-                            var users=this.wpCredentials[path].admin_users;
-                            for(var i=0;i<users.length;i++){
-                                var uLogin=users[i].user_login||users[i].username;
-                                if(uLogin&&uLogin.toLowerCase()===wpUser.toLowerCase()){
-                                    users[i].stored_password=d.password;
-                                    users[i].is_default_login=true;
-                                }
-                            }
-                        }
+                        // Re-fetch credentials from server (SQLite is now updated with new password)
+                        var self=this;var path=this.wpResetForm.path;
+                        var wp=null;if(this.wpInstalls){for(var i=0;i<this.wpInstalls.length;i++){if(this.wpInstalls[i].path===path){wp=this.wpInstalls[i];break;}}}
+                        if(wp){self.wpFetchCreds(wp);}
                     }else{this.wpResetResult={success:false,message:d.error||d.message||'Failed'};}
                 })
                 .catch(e=>{this.wpResetForm.saving=false;this.wpResetResult={success:false,message:'Request failed: '+(e.message||'Unknown error')};});
