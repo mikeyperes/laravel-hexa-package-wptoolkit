@@ -83,19 +83,7 @@ document.addEventListener('alpine:init', function() {
             },
             wpDoCopy(text, doneKey) {
                 var self = this;
-                try {
-                    var ta = document.createElement('textarea');
-                    ta.value = text;
-                    ta.style.position = 'fixed';
-                    ta.style.left = '-9999px';
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(ta);
-                } catch(e) {}
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(text).catch(function(){});
-                }
+                navigator.clipboard.writeText(text);
                 self.wpCopyDone[doneKey] = true;
                 setTimeout(function() { self.wpCopyDone[doneKey] = false; }, 2000);
             },
