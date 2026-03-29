@@ -93,6 +93,11 @@ document.addEventListener('alpine:init', function() {
                 self.wpCopyDone[doneKey] = true;
                 setTimeout(function() { self.wpCopyDone[doneKey] = false; }, 2000);
             },
+            wpCopyResetLogin() {
+                var loginUrl = this.wpResetForm.wpUrl ? this.wpResetForm.wpUrl + '/wp-login.php' : 'N/A';
+                var info = 'Login URL: ' + loginUrl + '\nUsername: ' + this.wpResetForm.username + '\nPassword: ' + this.wpResetResult.password;
+                this.wpDoCopy(info, 'reset_all');
+            },
             wpCopyPw(wp) {
                 var du = (this.wpCredentials[wp.path]?.admin_users || []).find(function(u) { return u.is_default_login; });
                 if (du && du.stored_password) this.wpDoCopy(du.stored_password, wp.path + '_pw');
@@ -482,11 +487,7 @@ document.addEventListener('alpine:init', function() {
                                                     </template>
                                                     <span x-text="wpCopyDone['reset_pw'] ? 'Copied!' : 'Copy Password'"></span>
                                                 </button>
-                                                <button @click="
-                                                    var loginUrl = wpResetForm.wpUrl ? wpResetForm.wpUrl + '/wp-login.php' : 'N/A';
-                                                    var info = 'Login URL: ' + loginUrl + '\nUsername: ' + wpResetForm.username + '\nPassword: ' + wpResetResult.password;
-                                                    wpDoCopy(info, 'reset_all');
-                                                " class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors"
+                                                <button @click="wpCopyResetLogin()" class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors"
                                                     :class="wpCopyDone['reset_all'] ? 'text-green-700 bg-green-50 border-green-300' : 'text-purple-700 bg-purple-50 hover:bg-purple-100 border-purple-200'">
                                                     <template x-if="!wpCopyDone['reset_all']">
                                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
