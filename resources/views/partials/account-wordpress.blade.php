@@ -22,7 +22,7 @@ document.addEventListener('alpine:init', function() {
         return {
             wpOpen: true, wpLoading: false, wpInstalls: null, wpCredentials: {}, wpCredLoading: {},
             wpAutoLogging: {}, wpPasswordVisible: {}, wpResetForm: null, wpResetResult: null,
-            wpScanError: null, wpUserFilter: '', wpCopyDone: {}, wpLoginUrls: {},
+            wpScanError: null, wpUserFilter: '', wpCopyDone: {}, wpLoginUrls: {}, wpTestLog: [], wpTestRunning: false,
             _h() { return {'Content-Type':'application/json','X-CSRF-TOKEN':document.querySelector('meta[name=csrf-token]').content,'Accept':'application/json'}; },
             wpScan() {
                 this.wpLoading = true; this.wpScanError = null;
@@ -98,6 +98,17 @@ document.addEventListener('alpine:init', function() {
                 var info = 'Login URL: ' + loginUrl + '\nUsername: ' + this.wpResetForm.username + '\nPassword: ' + this.wpResetResult.password;
                 this.wpDoCopy(info, 'reset_all');
             },
+            wpTestLogin() {
+                var pw = this.wpResetResult ? this.wpResetResult.password : this.wpResetForm.password;
+                if(!pw)return;
+                this.wpTestRunning=true;
+                var now=function(){return new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit'});};
+                this.wpTestLog=[{time:now(),message:'Sending test request...',status:'info'}];
+                fetch(cfg.routes.testLogin, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:this.wpResetForm.installId,wp_path:this.wpResetForm.wpPath,username:cfg.username,wp_user:this.wpResetForm.username,password:pw})})
+                .then(function(r){if(!r.ok){return r.text().then(function(t){try{var j=JSON.parse(t);throw new Error(j.error||j.message||'Server error ('+r.status+')');}catch(pe){if(pe.message&&!pe.message.includes('JSON'))throw pe;throw new Error('Server error ('+r.status+'): '+t.substring(0,200));}});}return r.json();})
+                .then(d=>{this.wpTestRunning=false;if(d.steps){this.wpTestLog=d.steps;}if(!d.steps||d.steps.length===0){this.wpTestLog.push({time:now(),message:d.error||'Unknown result',status:d.success?'ok':'error'});}})
+                .catch(e=>{this.wpTestRunning=false;this.wpTestLog.push({time:now(),message:'Request failed: '+(e.message||'Unknown error'),status:'error'});});
+            },
             wpCopyPw(wp) {
                 var du = (this.wpCredentials[wp.path]?.admin_users || []).find(function(u) { return u.is_default_login; });
                 if (du && du.stored_password) this.wpDoCopy(du.stored_password, wp.path + '_pw');
@@ -130,7 +141,8 @@ document.addEventListener('alpine:init', function() {
             getInstalls: '{{ route('wptoolkit.get-installs') }}',
             getCredentials: '{{ route('wptoolkit.get-credentials') }}',
             wpLogin: '{{ route('wptoolkit.wp-login') }}',
-            resetPassword: '{{ route('wptoolkit.reset-password') }}'
+            resetPassword: '{{ route('wptoolkit.reset-password') }}',
+            testLogin: '{{ route('wptoolkit.test-login') }}'
         }
      })">
 
@@ -497,7 +509,28 @@ document.addEventListener('alpine:init', function() {
                                                     </template>
                                                     <span x-text="wpCopyDone['reset_all'] ? 'Copied!' : 'Copy All Login Info'"></span>
                                                 </button>
+                                                <button @click="wpTestLogin()" :disabled="wpTestRunning"
+                                                    class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-yellow-700 bg-yellow-50 rounded hover:bg-yellow-100 border border-yellow-200 disabled:opacity-50">
+                                                    <svg x-show="!wpTestRunning" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                                    <svg x-show="wpTestRunning" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                                    <span x-text="wpTestRunning ? 'Testing...' : 'Test Login'"></span>
+                                                </button>
                                             </div>
+                                            {{-- Test Login Activity Log --}}
+                                            <template x-if="wpTestLog.length > 0">
+                                                <div class="mt-3 bg-gray-900 rounded-lg border border-gray-700 p-3 text-xs font-mono">
+                                                    <template x-for="(entry, i) in wpTestLog" :key="i">
+                                                        <div class="flex items-start gap-2 py-1" :class="i > 0 ? 'border-t border-gray-800' : ''">
+                                                            <span class="text-gray-500 shrink-0" x-text="entry.time"></span>
+                                                            <span :class="{
+                                                                'text-green-400': entry.status === 'ok',
+                                                                'text-red-400': entry.status === 'error',
+                                                                'text-gray-300': entry.status === 'info'
+                                                            }" x-text="entry.message" class="break-words"></span>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </template>
                                         </div>
                                     </template>
                                     <template x-if="!wpResetResult.success">
