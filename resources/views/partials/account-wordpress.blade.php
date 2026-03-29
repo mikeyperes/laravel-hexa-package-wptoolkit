@@ -228,14 +228,8 @@ document.addEventListener('alpine:init', function() {
                                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 shrink-0 ml-3" x-text="'WP ' + (wp.version || '?')"></span>
                             </div>
 
-                            {{-- Row 1: Admin user + badge --}}
-                            <div class="flex flex-wrap items-center gap-3 mb-1 text-xs text-gray-500">
-                                <template x-if="wp.admin_user || wpCredentials[wp.path]?.stored_credentials?.username">
-                                    <span class="inline-flex items-center gap-1">
-                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-                                        <span class="font-mono text-gray-700" x-text="wp.admin_user || wpCredentials[wp.path]?.stored_credentials?.username"></span>
-                                    </span>
-                                </template>
+                            {{-- User count badge --}}
+                            <div class="flex flex-wrap items-center gap-3 mb-2 text-xs text-gray-500">
                                 <template x-if="wpCredentials[wp.path] && !wpCredentials[wp.path].error">
                                     <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
@@ -250,9 +244,38 @@ document.addEventListener('alpine:init', function() {
                                 </template>
                             </div>
 
-                            {{-- Row 2: Password (masked, click to show) + Copy Password + Copy Login Info --}}
+                            {{-- Login URL --}}
+                            <template x-if="wp.login_url">
+                                <div class="flex flex-wrap items-center gap-3 mb-2 text-xs">
+                                    <a :href="wp.login_url" target="_blank" class="text-gray-500 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
+                                        <span x-text="wp.login_url"></span>
+                                        <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                                    </a>
+                                    <template x-if="wp.login_url && !wp.login_url.includes('/wp-login.php')">
+                                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-700">Custom login URL</span>
+                                    </template>
+                                </div>
+                            </template>
+
+                            {{-- Username --}}
+                            <template x-if="wp.admin_user || wpCredentials[wp.path]?.stored_credentials?.username">
+                                <div class="flex flex-wrap items-center gap-1 mb-1 text-xs text-gray-500">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                                    <span class="font-mono text-gray-700" x-text="wpCredentials[wp.path]?.stored_credentials?.username || wp.admin_user"></span>
+                                </div>
+                            </template>
+
+                            {{-- Email --}}
+                            <template x-if="wpCredentials[wp.path]?.stored_credentials?.email || (wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login && (u.email || u.user_email))">
+                                <div class="flex flex-wrap items-center gap-1 mb-1 text-xs text-gray-400">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                    <span class="text-gray-500" x-text="wpCredentials[wp.path]?.stored_credentials?.email || ((wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login) || {}).email || ((wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login) || {}).user_email || ''"></span>
+                                </div>
+                            </template>
+
+                            {{-- Password (masked, click to show) + Copy Password + Copy Login Info --}}
                             <template x-if="(wpCredentials[wp.path]?.admin_users || []).find(u => u.is_default_login && u.stored_password)">
-                                <div class="flex flex-wrap items-center gap-2 mb-3 text-xs">
+                                <div class="flex flex-wrap items-center gap-2 mb-2 text-xs">
                                     <span class="inline-flex items-center gap-1 text-gray-500" x-data="{show:false}">
                                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
                                         <span class="font-mono text-gray-700 cursor-pointer hover:text-gray-900" @click="show=!show"
@@ -275,19 +298,6 @@ document.addEventListener('alpine:init', function() {
                                 </div>
                             </template>
 
-                            {{-- Login URL (from scan data — always available immediately) --}}
-                            <template x-if="wp.login_url">
-                                <div class="flex flex-wrap items-center gap-3 mb-3 text-xs">
-                                    <a :href="wp.login_url" target="_blank" class="text-gray-500 hover:text-blue-600 hover:underline inline-flex items-center gap-1 break-words">
-                                        <span x-text="wp.login_url"></span>
-                                        <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                                    </a>
-                                    <template x-if="wp.login_url && !wp.login_url.includes('/wp-login.php')">
-                                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-700">Custom login URL</span>
-                                    </template>
-                                </div>
-                            </template>
-
                             {{-- Action Buttons --}}
                             <div class="flex flex-wrap items-center gap-2 mb-3">
                                 {{-- Show Credentials (only visible before credentials are loaded) --}}
@@ -299,13 +309,13 @@ document.addEventListener('alpine:init', function() {
                                     <span x-text="wpCredLoading[wp.path] ? 'Loading...' : 'Show Credentials'"></span>
                                 </button>
 
-                                {{-- Auto Login (only when a real default login user is detected) --}}
+                                {{-- Default Login (only when a real default login user is detected) --}}
                                 <template x-if="wpHasLoginUser(wp)">
                                     <button @click="wpAutoLogin(wp, wpBestLoginUser(wp))" :disabled="wpIsLogging(wp, wpBestLoginUser(wp))"
                                         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 border border-green-200 disabled:opacity-50">
                                         <svg x-show="!wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
                                         <svg x-show="wpIsLogging(wp, wpBestLoginUser(wp))" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                        <span x-text="wpIsLogging(wp, wpBestLoginUser(wp)) ? 'Logging in...' : 'Auto Login'"></span>
+                                        <span x-text="wpIsLogging(wp, wpBestLoginUser(wp)) ? 'Logging in...' : 'Default Login'"></span>
                                     </button>
                                 </template>
                                 {{-- No default login detected message --}}
