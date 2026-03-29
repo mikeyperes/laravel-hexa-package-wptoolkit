@@ -453,9 +453,21 @@ class WpToolkitService
                 $adminUsers[0]['is_default_login'] = true;
             }
 
-            // Sort: default login user always first
+            // Sort: default login first, then admins by name, then others by name
             usort($adminUsers, function ($a, $b) {
-                return ($b['is_default_login'] ?? false) <=> ($a['is_default_login'] ?? false);
+                $aDefault = ($a['is_default_login'] ?? false) ? 1 : 0;
+                $bDefault = ($b['is_default_login'] ?? false) ? 1 : 0;
+                if ($aDefault !== $bDefault) return $bDefault <=> $aDefault;
+
+                $aRole = strtolower($a['role'] ?? $a['roles'] ?? '');
+                $bRole = strtolower($b['role'] ?? $b['roles'] ?? '');
+                $aAdmin = str_contains($aRole, 'admin') ? 1 : 0;
+                $bAdmin = str_contains($bRole, 'admin') ? 1 : 0;
+                if ($aAdmin !== $bAdmin) return $bAdmin <=> $aAdmin;
+
+                $aName = strtolower($a['user_login'] ?? $a['username'] ?? '');
+                $bName = strtolower($b['user_login'] ?? $b['username'] ?? '');
+                return $aName <=> $bName;
             });
         }
 
@@ -579,33 +591,34 @@ class WpToolkitService
         $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
         $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
+        $success = str_contains($output, 'Success');
 
-        if (str_contains($output, 'Success')) {
+        if (!$success) {
+            // Method 2: Direct wp-cli as cPanel user
+            $cmd = "sudo -u {$escapedUser} wp user update {$escapedWpUser} --user_pass={$escapedPass} --path={$escapedPath} 2>&1";
+            $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
+            $fallbackOutput = trim($connection->exec($cmd));
+            $output .= "\n---FALLBACK---\n" . $fallbackOutput;
+            $success = str_contains($fallbackOutput, 'Success');
+        }
+
+        if ($success) {
+            // Update WP Toolkit's stored credentials in SQLite so rescan shows the new password
+            $sqliteDb = '/usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3';
+            $escapedNewPass = escapeshellarg($newPassword);
+            $connection->exec("sqlite3 {$sqliteDb} \"UPDATE InstanceProperties SET value = {$escapedNewPass} WHERE instanceId = {$escapedId} AND name = 'password'\" 2>&1");
+            $connection->exec("sqlite3 {$sqliteDb} \"UPDATE InstanceProperties SET value = {$escapedWpUser} WHERE instanceId = {$escapedId} AND name = 'login'\" 2>&1");
+            $this->generic->log('info', '[WpToolkit] Updated SQLite stored credentials', ['install_id' => $installId, 'wp_user' => $wpUser]);
+
             $connection->disconnect();
-            $this->generic->log('info', '[WpToolkit] Password reset success via wp-toolkit');
             return [
                 'success'  => true,
                 'password' => $newPassword,
                 'wp_user'  => $wpUser,
             ];
         }
-
-        // Method 2: Direct wp-cli as cPanel user
-        $cmd = "sudo -u {$escapedUser} wp user update {$escapedWpUser} --user_pass={$escapedPass} --path={$escapedPath} 2>&1";
-        $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
-        $fallbackOutput = trim($connection->exec($cmd));
-        $output .= "\n---FALLBACK---\n" . $fallbackOutput;
 
         $connection->disconnect();
-
-        if (str_contains($fallbackOutput, 'Success')) {
-            $this->generic->log('info', '[WpToolkit] Password reset success via direct wp-cli');
-            return [
-                'success'  => true,
-                'password' => $newPassword,
-                'wp_user'  => $wpUser,
-            ];
-        }
 
         $this->generic->log('error', '[WpToolkit] Password reset failed', [
             'output' => mb_substr($output, 0, 500),

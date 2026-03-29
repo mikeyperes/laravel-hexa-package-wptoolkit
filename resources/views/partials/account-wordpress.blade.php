@@ -80,7 +80,25 @@ document.addEventListener('alpine:init', function() {
                 if(!this.wpResetForm.password)return;this.wpResetForm.saving=true;this.wpResetResult=null;
                 fetch(cfg.routes.resetPassword, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:this.wpResetForm.installId,wp_path:this.wpResetForm.wpPath,username:cfg.username,wp_user:this.wpResetForm.username,password:this.wpResetForm.password})})
                 .then(function(r){if(!r.ok){return r.text().then(function(t){try{var j=JSON.parse(t);throw new Error(j.error||j.message||'Server error ('+r.status+')');}catch(pe){if(pe.message&&!pe.message.includes('JSON'))throw pe;throw new Error('Server error ('+r.status+'): '+t.substring(0,200));}});}return r.json();})
-                .then(d=>{this.wpResetForm.saving=false;if(d.password){this.wpResetResult={success:true,password:d.password};}else{this.wpResetResult={success:false,message:d.error||d.message||'Failed'};}})
+                .then(d=>{
+                    this.wpResetForm.saving=false;
+                    if(d.password){
+                        this.wpResetResult={success:true,password:d.password};
+                        // Update client-side credentials so table shows new password immediately
+                        var path=this.wpResetForm.path;
+                        var wpUser=this.wpResetForm.username;
+                        if(this.wpCredentials[path]&&this.wpCredentials[path].admin_users){
+                            var users=this.wpCredentials[path].admin_users;
+                            for(var i=0;i<users.length;i++){
+                                var uLogin=users[i].user_login||users[i].username;
+                                if(uLogin&&uLogin.toLowerCase()===wpUser.toLowerCase()){
+                                    users[i].stored_password=d.password;
+                                    users[i].is_default_login=true;
+                                }
+                            }
+                        }
+                    }else{this.wpResetResult={success:false,message:d.error||d.message||'Failed'};}
+                })
                 .catch(e=>{this.wpResetForm.saving=false;this.wpResetResult={success:false,message:'Request failed: '+(e.message||'Unknown error')};});
             },
             wpUserMatches(user) {
@@ -444,11 +462,16 @@ document.addEventListener('alpine:init', function() {
             {{-- Password Reset Modal --}}
             <template x-if="wpResetForm && wpResetForm.show">
                 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="wpResetForm.show = false">
-                    <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
-                        <h3 class="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                            <svg class="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                            Set WordPress Password
-                        </h3>
+                    <div class="bg-white rounded-xl shadow-xl w-full max-w-xl mx-4 p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-base font-semibold text-gray-900 flex items-center gap-2">
+                                <svg class="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                                Set WordPress Password
+                            </h3>
+                            <button @click="wpResetForm.show = false" class="text-gray-400 hover:text-gray-600">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
 
                         <div class="space-y-3 mb-4">
                             {{-- Username (read-only display) --}}
