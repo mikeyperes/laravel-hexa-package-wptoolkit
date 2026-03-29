@@ -606,12 +606,13 @@ class WpToolkitService
         }
 
         if ($success) {
-            // Update WP Toolkit's stored credentials in SQLite so rescan shows the new password
+            // Insert or replace WP Toolkit's stored credentials in SQLite so rescan shows the new password
+            // PK is (instanceId, name) — rows may not exist yet, so INSERT OR REPLACE
             $sqliteDb = '/usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3';
             $escapedNewPass = escapeshellarg($newPassword);
-            $connection->exec("sqlite3 {$sqliteDb} \"UPDATE InstanceProperties SET value = {$escapedNewPass} WHERE instanceId = {$escapedId} AND name = 'password'\" 2>&1");
-            $connection->exec("sqlite3 {$sqliteDb} \"UPDATE InstanceProperties SET value = {$escapedWpUser} WHERE instanceId = {$escapedId} AND name = 'login'\" 2>&1");
-            $this->generic->log('info', '[WpToolkit] Updated SQLite stored credentials', ['install_id' => $installId, 'wp_user' => $wpUser]);
+            $connection->exec("sqlite3 {$sqliteDb} \"INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$escapedId}, 'password', {$escapedNewPass})\" 2>&1");
+            $connection->exec("sqlite3 {$sqliteDb} \"INSERT OR REPLACE INTO InstanceProperties (instanceId, name, value) VALUES ({$escapedId}, 'login', {$escapedWpUser})\" 2>&1");
+            $this->generic->log('info', '[WpToolkit] Stored credentials in SQLite', ['install_id' => $installId, 'wp_user' => $wpUser]);
 
             $connection->disconnect();
             return [
