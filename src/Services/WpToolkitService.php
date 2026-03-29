@@ -453,7 +453,10 @@ class WpToolkitService
                 $adminUsers[0]['is_default_login'] = true;
             }
 
-            // Sort: default login first, then admins by name, then others by name
+        }
+
+        // Sort: default login first, then admins by name, then others by name
+        if ($adminUsers) {
             usort($adminUsers, function ($a, $b) {
                 $aDefault = ($a['is_default_login'] ?? false) ? 1 : 0;
                 $bDefault = ($b['is_default_login'] ?? false) ? 1 : 0;
