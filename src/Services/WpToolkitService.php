@@ -18,6 +18,7 @@ class WpToolkitService
 {
     protected GenericService $generic;
     protected WhmService $whm;
+    protected array $sshCache = [];
 
     /**
      * @param GenericService $generic
@@ -27,6 +28,30 @@ class WpToolkitService
     {
         $this->generic = $generic;
         $this->whm = $whm;
+    }
+
+    /**
+     * Get or create a cached SSH connection for a server.
+     * Reuses existing connections to avoid reconnecting for every operation.
+     *
+     * @param WhmServer $server
+     * @return array{success: bool, connection?: SSH2, error?: string}
+     */
+    public function getConnection(WhmServer $server): array
+    {
+        $key = $server->id . '_' . $server->hostname;
+        if (isset($this->sshCache[$key])) {
+            $conn = $this->sshCache[$key];
+            if ($conn->isConnected()) {
+                return ['success' => true, 'connection' => $conn];
+            }
+            unset($this->sshCache[$key]);
+        }
+        $result = $this->sshConnect($server);
+        if ($result['success'] && isset($result['connection'])) {
+            $this->sshCache[$key] = $result['connection'];
+        }
+        return $result;
     }
 
     /**
@@ -1157,7 +1182,7 @@ PHP;
      */
     public function wpCliCreatePost(WhmServer $server, int $installId, string $title, string $content, string $status = 'draft', array $categoryIds = [], array $tagIds = [], ?string $date = null): array
     {
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
         }
@@ -1220,7 +1245,7 @@ PHP;
      */
     public function wpCliUploadMedia(WhmServer $server, int $installId, string $imageUrl, string $filename = '', string $altText = ''): array
     {
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
         }
@@ -1283,7 +1308,7 @@ PHP;
      */
     public function wpCliCreateCategory(WhmServer $server, int $installId, string $name): array
     {
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
         }
@@ -1321,7 +1346,7 @@ PHP;
      */
     public function wpCliCreateTag(WhmServer $server, int $installId, string $name): array
     {
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
         }
@@ -1359,7 +1384,7 @@ PHP;
      */
     public function wpCliTestWriteAccess(WhmServer $server, int $installId): array
     {
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
         }
@@ -1379,5 +1404,106 @@ PHP;
         }
 
         return ['success' => false, 'message' => 'Write test failed: ' . \Illuminate\Support\Str::limit($output, 200)];
+    }
+
+    /**
+     * Batch create/get WordPress categories via a single wp-cli call.
+     * Much faster than individual calls — one SSH command for all categories.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param array     $names Category names
+     * @return array{success: bool, term_ids: array, message: string}
+     */
+    public function wpCliBatchCategories(WhmServer $server, int $installId, array $names): array
+    {
+        if (empty($names)) return ['success' => true, 'term_ids' => [], 'message' => 'No categories'];
+
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'term_ids' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $termIds = [];
+
+        // Build a single shell script that creates all categories
+        $script = "#!/bin/bash\n";
+        foreach ($names as $name) {
+            $eName = escapeshellarg(trim($name));
+            // Try to get existing, if not found create it
+            $script .= "EXISTING=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term list category --field=term_id --name={$eName} --format=csv 2>/dev/null | grep -E '^[0-9]+$' | head -1)\n";
+            $script .= "if [ -n \"\$EXISTING\" ]; then echo \"EXISTS:\$EXISTING:{$name}\"; else NEW=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term create category {$eName} --porcelain 2>/dev/null | grep -E '^[0-9]+$' | head -1); echo \"NEW:\$NEW:{$name}\"; fi\n";
+        }
+
+        $tmpScript = '/tmp/hexa_batch_cats_' . uniqid() . '.sh';
+        $connection->exec('cat > ' . escapeshellarg($tmpScript) . " << 'HEXAEOF'\n" . $script . "\nHEXAEOF");
+        $connection->exec('chmod +x ' . escapeshellarg($tmpScript));
+
+        $output = trim($connection->exec('bash ' . escapeshellarg($tmpScript) . ' 2>/dev/null'));
+        $connection->exec('rm -f ' . escapeshellarg($tmpScript));
+
+        foreach (explode("\n", $output) as $line) {
+            $line = trim($line);
+            if (preg_match('/^(EXISTS|NEW):(\d+):(.+)$/', $line, $m)) {
+                $termIds[] = (int) $m[2];
+            }
+        }
+
+        return [
+            'success' => true,
+            'term_ids' => $termIds,
+            'message' => count($termIds) . '/' . count($names) . ' categories ready',
+        ];
+    }
+
+    /**
+     * Batch create/get WordPress tags via a single wp-cli call.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param array     $names Tag names
+     * @return array{success: bool, term_ids: array, message: string}
+     */
+    public function wpCliBatchTags(WhmServer $server, int $installId, array $names): array
+    {
+        if (empty($names)) return ['success' => true, 'term_ids' => [], 'message' => 'No tags'];
+
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'term_ids' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $termIds = [];
+
+        $script = "#!/bin/bash\n";
+        foreach ($names as $name) {
+            $eName = escapeshellarg(trim($name));
+            $script .= "EXISTING=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term list post_tag --field=term_id --name={$eName} --format=csv 2>/dev/null | grep -E '^[0-9]+$' | head -1)\n";
+            $script .= "if [ -n \"\$EXISTING\" ]; then echo \"EXISTS:\$EXISTING:{$name}\"; else NEW=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term create post_tag {$eName} --porcelain 2>/dev/null | grep -E '^[0-9]+$' | head -1); echo \"NEW:\$NEW:{$name}\"; fi\n";
+        }
+
+        $tmpScript = '/tmp/hexa_batch_tags_' . uniqid() . '.sh';
+        $connection->exec('cat > ' . escapeshellarg($tmpScript) . " << 'HEXAEOF'\n" . $script . "\nHEXAEOF");
+        $connection->exec('chmod +x ' . escapeshellarg($tmpScript));
+
+        $output = trim($connection->exec('bash ' . escapeshellarg($tmpScript) . ' 2>/dev/null'));
+        $connection->exec('rm -f ' . escapeshellarg($tmpScript));
+
+        foreach (explode("\n", $output) as $line) {
+            $line = trim($line);
+            if (preg_match('/^(EXISTS|NEW):(\d+):(.+)$/', $line, $m)) {
+                $termIds[] = (int) $m[2];
+            }
+        }
+
+        return [
+            'success' => true,
+            'term_ids' => $termIds,
+            'message' => count($termIds) . '/' . count($names) . ' tags ready',
+        ];
     }
 }
