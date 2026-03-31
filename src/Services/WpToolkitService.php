@@ -1294,18 +1294,27 @@ PHP;
                 $connection->exec($altCmd);
             }
 
-            // Get the media URL
-            $urlCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post list --post_type=attachment --post__in={$mediaId} --field=guid --format=csv 2>&1";
-            $mediaUrl = trim($connection->exec($urlCmd));
-            // Clean up CSV header if present
-            $lines = array_filter(explode("\n", $mediaUrl), fn($l) => !empty(trim($l)) && trim($l) !== 'guid');
-            $mediaUrl = trim($lines[array_key_first($lines)] ?? '');
+            // Get all image sizes via wp eval (single WP bootstrap)
+            $phpCode = base64_encode('$id=' . $mediaId . ';$src=wp_get_attachment_url($id);$sizes=["thumbnail","medium","medium_large","large","full"];$all=["full"=>$src];foreach($sizes as $s){$img=wp_get_attachment_image_src($id,$s);if($img) $all[$s]=$img[0];}echo "HEXA_SIZES:".json_encode($all);');
+            $sizesCmd = "CODE=\$(echo '{$phpCode}' | base64 -d) && wp-toolkit --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
+            $sizesOutput = trim($connection->exec($sizesCmd));
 
-            $this->generic->log('info', '[WpToolkit] Media uploaded', ['media_id' => $mediaId, 'url' => $mediaUrl]);
+            $sizes = [];
+            $mediaUrl = '';
+            foreach (explode("\n", $sizesOutput) as $sLine) {
+                if (str_contains($sLine, 'HEXA_SIZES:')) {
+                    $json = substr($sLine, strpos($sLine, 'HEXA_SIZES:') + 11);
+                    $sizes = json_decode(trim($json), true) ?: [];
+                    $mediaUrl = $sizes['full'] ?? $sizes['large'] ?? '';
+                    break;
+                }
+            }
+
+            $this->generic->log('info', '[WpToolkit] Media uploaded', ['media_id' => $mediaId, 'url' => $mediaUrl, 'sizes' => count($sizes)]);
             return [
                 'success' => true,
                 'message' => "Media uploaded (ID: {$mediaId})",
-                'data'    => ['media_id' => $mediaId, 'media_url' => $mediaUrl],
+                'data'    => ['media_id' => $mediaId, 'media_url' => $mediaUrl, 'sizes' => $sizes, 'source_url' => $imageUrl],
             ];
         }
 
