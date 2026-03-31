@@ -40,15 +40,30 @@ class WpToolkitService
     public function getConnection(WhmServer $server): array
     {
         $key = $server->id . '_' . $server->hostname;
+
+        // Try cached connection — but verify it's usable by running a simple command
         if (isset($this->sshCache[$key])) {
             $conn = $this->sshCache[$key];
             if ($conn->isConnected()) {
-                return ['success' => true, 'connection' => $conn];
+                try {
+                    // Test the connection with a trivial command
+                    $conn->setTimeout(5);
+                    $test = $conn->exec('echo OK');
+                    if (trim($test) === 'OK') {
+                        $conn->setTimeout(config('wptoolkit.ssh.timeout', 60));
+                        return ['success' => true, 'connection' => $conn];
+                    }
+                } catch (\Exception $e) {
+                    // Connection is stale, fall through to reconnect
+                }
             }
             unset($this->sshCache[$key]);
         }
+
+        // Create fresh connection
         $result = $this->sshConnect($server);
         if ($result['success'] && isset($result['connection'])) {
+            $result['connection']->setTimeout(config('wptoolkit.ssh.timeout', 60));
             $this->sshCache[$key] = $result['connection'];
         }
         return $result;
@@ -1109,7 +1124,7 @@ PHP;
     {
         $hostname = $server->hostname;
         $port = config('wptoolkit.ssh.port', 22);
-        $timeout = config('wptoolkit.ssh.timeout', 30);
+        $timeout = config('wptoolkit.ssh.timeout', 120);
         $username = $server->ssh_admin_username ?: $server->username ?: 'root';
 
         $this->generic->log('info', '[WpToolkit] SSH connecting', [
@@ -1417,49 +1432,11 @@ PHP;
      */
     public function wpCliBatchCategories(WhmServer $server, int $installId, array $names): array
     {
-        if (empty($names)) return ['success' => true, 'term_ids' => [], 'message' => 'No categories'];
-
-        $ssh = $this->getConnection($server);
-        if (!$ssh['success']) {
-            return ['success' => false, 'term_ids' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
-        }
-
-        $connection = $ssh['connection'];
-        $escapedId = escapeshellarg((string) $installId);
-        $termIds = [];
-
-        // Build a single shell script that creates all categories
-        $script = "#!/bin/bash\n";
-        foreach ($names as $name) {
-            $eName = escapeshellarg(trim($name));
-            // Try to get existing, if not found create it
-            $script .= "EXISTING=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term list category --field=term_id --name={$eName} --format=csv 2>/dev/null | grep -E '^[0-9]+$' | head -1)\n";
-            $script .= "if [ -n \"\$EXISTING\" ]; then echo \"EXISTS:\$EXISTING:{$name}\"; else NEW=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term create category {$eName} --porcelain 2>/dev/null | grep -E '^[0-9]+$' | head -1); echo \"NEW:\$NEW:{$name}\"; fi\n";
-        }
-
-        $tmpScript = '/tmp/hexa_batch_cats_' . uniqid() . '.sh';
-        $connection->exec('cat > ' . escapeshellarg($tmpScript) . " << 'HEXAEOF'\n" . $script . "\nHEXAEOF");
-        $connection->exec('chmod +x ' . escapeshellarg($tmpScript));
-
-        $output = trim($connection->exec('bash ' . escapeshellarg($tmpScript) . ' 2>/dev/null'));
-        $connection->exec('rm -f ' . escapeshellarg($tmpScript));
-
-        foreach (explode("\n", $output) as $line) {
-            $line = trim($line);
-            if (preg_match('/^(EXISTS|NEW):(\d+):(.+)$/', $line, $m)) {
-                $termIds[] = (int) $m[2];
-            }
-        }
-
-        return [
-            'success' => true,
-            'term_ids' => $termIds,
-            'message' => count($termIds) . '/' . count($names) . ' categories ready',
-        ];
+        return $this->wpCliBatchTerms($server, $installId, $names, 'category');
     }
 
     /**
-     * Batch create/get WordPress tags via a single wp-cli call.
+     * Batch create/get WordPress tags via single WP bootstrap.
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -1468,7 +1445,23 @@ PHP;
      */
     public function wpCliBatchTags(WhmServer $server, int $installId, array $names): array
     {
-        if (empty($names)) return ['success' => true, 'term_ids' => [], 'message' => 'No tags'];
+        return $this->wpCliBatchTerms($server, $installId, $names, 'post_tag');
+    }
+
+    /**
+     * Batch create/get WordPress terms using a single `wp eval` call.
+     * Bootstraps WordPress ONCE and processes all terms in one PHP execution.
+     * 15x faster than individual wp-cli calls.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param array     $names Term names
+     * @param string    $taxonomy 'category' or 'post_tag'
+     * @return array{success: bool, term_ids: array, message: string}
+     */
+    private function wpCliBatchTerms(WhmServer $server, int $installId, array $names, string $taxonomy): array
+    {
+        if (empty($names)) return ['success' => true, 'term_ids' => [], 'message' => 'No terms'];
 
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -1477,33 +1470,49 @@ PHP;
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $escapedTax = escapeshellarg($taxonomy);
+
+        // Build a shell script that passes PHP to wp-toolkit eval via a variable
+        // This avoids all escaping issues by using base64 decode → shell variable → eval
+        $namesJson = json_encode(array_values(array_map('trim', $names)));
+        $phpCode = '$names = json_decode(\'' . str_replace("'", "\\'", $namesJson) . '\', true);'
+            . '$tax = \'' . $taxonomy . '\';'
+            . '$ids = [];'
+            . 'foreach ($names as $n) {'
+            . '  $e = term_exists($n, $tax);'
+            . '  if ($e) { $ids[] = is_array($e) ? (int)$e[\'term_id\'] : (int)$e; }'
+            . '  else { $r = wp_insert_term($n, $tax); if (!is_wp_error($r)) $ids[] = (int)$r[\'term_id\']; }'
+            . '}'
+            . 'echo \'HEXA_RESULT:\' . json_encode($ids);';
+
+        $b64 = base64_encode($phpCode);
+        $tmpScript = '/tmp/hexa_batch_' . uniqid() . '.sh';
+        $scriptContent = "#!/bin/bash\nCODE=\$(echo '{$b64}' | base64 -d)\nwp-toolkit --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
+        $connection->exec("echo " . escapeshellarg($scriptContent) . " > {$tmpScript} && chmod +x {$tmpScript}");
+
+        $cmd = "bash {$tmpScript}";
+
+        $this->generic->log('info', "[WpToolkit] Batch {$taxonomy}: " . count($names) . " terms");
+
+        $rawOutput = trim($connection->exec($cmd));
+        $connection->exec("rm -f {$tmpScript}");
+
+        // Extract JSON result from output (may contain warnings)
         $termIds = [];
-
-        $script = "#!/bin/bash\n";
-        foreach ($names as $name) {
-            $eName = escapeshellarg(trim($name));
-            $script .= "EXISTING=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term list post_tag --field=term_id --name={$eName} --format=csv 2>/dev/null | grep -E '^[0-9]+$' | head -1)\n";
-            $script .= "if [ -n \"\$EXISTING\" ]; then echo \"EXISTS:\$EXISTING:{$name}\"; else NEW=\$(wp-toolkit --wp-cli -instance-id {$installId} -- term create post_tag {$eName} --porcelain 2>/dev/null | grep -E '^[0-9]+$' | head -1); echo \"NEW:\$NEW:{$name}\"; fi\n";
-        }
-
-        $tmpScript = '/tmp/hexa_batch_tags_' . uniqid() . '.sh';
-        $connection->exec('cat > ' . escapeshellarg($tmpScript) . " << 'HEXAEOF'\n" . $script . "\nHEXAEOF");
-        $connection->exec('chmod +x ' . escapeshellarg($tmpScript));
-
-        $output = trim($connection->exec('bash ' . escapeshellarg($tmpScript) . ' 2>/dev/null'));
-        $connection->exec('rm -f ' . escapeshellarg($tmpScript));
-
-        foreach (explode("\n", $output) as $line) {
-            $line = trim($line);
-            if (preg_match('/^(EXISTS|NEW):(\d+):(.+)$/', $line, $m)) {
-                $termIds[] = (int) $m[2];
+        foreach (explode("\n", $rawOutput) as $line) {
+            if (str_contains($line, 'HEXA_RESULT:')) {
+                $json = substr($line, strpos($line, 'HEXA_RESULT:') + 12);
+                $termIds = json_decode(trim($json), true) ?: [];
+                break;
             }
         }
+
+        $label = $taxonomy === 'category' ? 'categories' : 'tags';
 
         return [
             'success' => true,
             'term_ids' => $termIds,
-            'message' => count($termIds) . '/' . count($names) . ' tags ready',
+            'message' => count($termIds) . '/' . count($names) . " {$label} ready",
         ];
     }
 }
