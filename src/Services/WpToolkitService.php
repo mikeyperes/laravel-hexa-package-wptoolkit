@@ -1416,15 +1416,41 @@ PHP;
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
 
+        // Get admin user info first
+        $userCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=user_login,display_name --format=csv 2>&1";
+        $userOutput = trim($connection->exec($userCmd));
+        $adminUser = '';
+        $adminDisplay = '';
+        foreach (explode("\n", $userOutput) as $line) {
+            $line = trim($line);
+            if (empty($line) || $line === 'user_login,display_name' || str_starts_with($line, 'Deprecated:')) continue;
+            $parts = str_getcsv($line);
+            if (!empty($parts[0]) && $parts[0] !== 'user_login') {
+                $adminUser = $parts[0];
+                $adminDisplay = $parts[1] ?? $parts[0];
+                break;
+            }
+        }
+
         // Create a test post
         $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post create --post_title='Hexa Write Test' --post_status=draft --porcelain 2>&1";
         $output = trim($connection->exec($cmd));
 
+        // Filter warnings
+        foreach (explode("\n", $output) as $line) {
+            if (is_numeric(trim($line))) { $output = trim($line); break; }
+        }
+
         if (is_numeric($output)) {
             $postId = (int) $output;
-            // Delete it immediately
             $connection->exec("wp-toolkit --wp-cli -instance-id {$escapedId} -- post delete {$postId} --force 2>&1");
-            return ['success' => true, 'message' => 'Write access confirmed — test post created and deleted.'];
+            return [
+                'success' => true,
+                'message' => "WordPress connection established — write access confirmed as {$adminDisplay} ({$adminUser}), administrator",
+                'admin_user' => $adminUser,
+                'admin_display' => $adminDisplay,
+                'admin_role' => 'administrator',
+            ];
         }
 
         return ['success' => false, 'message' => 'Write test failed: ' . \Illuminate\Support\Str::limit($output, 200)];
