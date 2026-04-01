@@ -1424,7 +1424,7 @@ PHP;
         foreach (explode("\n", $userOutput) as $line) {
             $line = trim($line);
             if (empty($line) || $line === 'user_login,display_name' || str_starts_with($line, 'Deprecated:')) continue;
-            $parts = str_getcsv($line);
+            $parts = str_getcsv($line, ',', '"', '');
             if (!empty($parts[0]) && $parts[0] !== 'user_login') {
                 $adminUser = $parts[0];
                 $adminDisplay = $parts[1] ?? $parts[0];
