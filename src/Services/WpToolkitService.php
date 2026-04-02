@@ -1589,4 +1589,77 @@ PHP;
             'message' => count($termIds) . '/' . count($names) . " {$label} ready",
         ];
     }
+
+    /**
+     * Delete a WordPress post via wp-cli SSH.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param int       $postId WP post ID
+     * @param bool      $force  Skip trash, delete permanently
+     * @return array{success: bool, message: string}
+     */
+    public function wpCliDeletePost(WhmServer $server, int $installId, int $postId, bool $force = true): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $forceFlag = $force ? ' --force' : '';
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post delete {$postId}{$forceFlag} 2>&1";
+        $output = trim($connection->exec($cmd));
+
+        // Filter warnings
+        $clean = '';
+        foreach (explode("\n", $output) as $line) {
+            $line = trim($line);
+            if (str_starts_with($line, 'Deprecated:') || str_starts_with($line, 'Warning:') || str_starts_with($line, 'Notice:') || str_starts_with($line, 'PHP ')) continue;
+            $clean .= $line . ' ';
+        }
+        $clean = trim($clean);
+
+        $success = str_contains(strtolower($clean), 'success') || str_contains(strtolower($clean), 'deleted');
+        $this->generic->log($success ? 'info' : 'error', '[WpToolkit] deletePost', ['post_id' => $postId, 'output' => $clean]);
+
+        return ['success' => $success, 'message' => $success ? "Post {$postId} deleted." : "Delete failed: {$clean}"];
+    }
+
+    /**
+     * Delete a WordPress media attachment via wp-cli SSH.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param int       $mediaId WP media attachment ID
+     * @param bool      $force   Skip trash, delete permanently
+     * @return array{success: bool, message: string}
+     */
+    public function wpCliDeleteMedia(WhmServer $server, int $installId, int $mediaId, bool $force = true): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $forceFlag = $force ? ' --force' : '';
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post delete {$mediaId}{$forceFlag} 2>&1";
+        $output = trim($connection->exec($cmd));
+
+        $clean = '';
+        foreach (explode("\n", $output) as $line) {
+            $line = trim($line);
+            if (str_starts_with($line, 'Deprecated:') || str_starts_with($line, 'Warning:') || str_starts_with($line, 'Notice:') || str_starts_with($line, 'PHP ')) continue;
+            $clean .= $line . ' ';
+        }
+        $clean = trim($clean);
+
+        $success = str_contains(strtolower($clean), 'success') || str_contains(strtolower($clean), 'deleted');
+        $this->generic->log($success ? 'info' : 'error', '[WpToolkit] deleteMedia', ['media_id' => $mediaId, 'output' => $clean]);
+
+        return ['success' => $success, 'message' => $success ? "Media {$mediaId} deleted." : "Delete failed: {$clean}"];
+    }
 }
