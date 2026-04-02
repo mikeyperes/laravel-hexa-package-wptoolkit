@@ -1258,7 +1258,19 @@ PHP;
      * @param string    $altText    Alt text for the image
      * @return array{success: bool, message: string, data?: array}
      */
-    public function wpCliUploadMedia(WhmServer $server, int $installId, string $imageUrl, string $filename = '', string $altText = ''): array
+    /**
+     * Upload media to WordPress via wp-cli SSH with full SEO metadata.
+     *
+     * @param WhmServer $server
+     * @param int       $installId
+     * @param string    $imageUrl     Source image URL
+     * @param string    $filename     Desired filename (e.g. hexa_29_energy-crisis.jpg)
+     * @param string    $altText      Alt text for SEO
+     * @param string    $caption      Image caption
+     * @param string    $description  Image description
+     * @return array
+     */
+    public function wpCliUploadMedia(WhmServer $server, int $installId, string $imageUrl, string $filename = '', string $altText = '', string $caption = '', string $description = ''): array
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -1288,24 +1300,40 @@ PHP;
         if (is_numeric($output)) {
             $mediaId = (int) $output;
 
-            // Set alt text if provided
-            if ($altText) {
-                $altCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post meta update {$mediaId} _wp_attachment_image_alt " . escapeshellarg($altText) . " 2>&1";
-                $connection->exec($altCmd);
-            }
-
-            // Get all image sizes via wp eval (single WP bootstrap)
-            $phpCode = base64_encode('$id=' . $mediaId . ';$src=wp_get_attachment_url($id);$sizes=["thumbnail","medium","medium_large","large","full"];$all=["full"=>$src];foreach($sizes as $s){$img=wp_get_attachment_image_src($id,$s);if($img) $all[$s]=$img[0];}echo "HEXA_SIZES:".json_encode($all);');
-            $sizesCmd = "CODE=\$(echo '{$phpCode}' | base64 -d) && wp-toolkit --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
-            $sizesOutput = trim($connection->exec($sizesCmd));
+            // Set all metadata via single wp eval (alt, caption, description, hexa marker)
+            $metaPhp = '$id=' . $mediaId . ';'
+                . ($altText ? 'update_post_meta($id,"_wp_attachment_image_alt",' . json_encode($altText) . ');' : '')
+                . 'update_post_meta($id,"_hexa_generated","true");'
+                . 'update_post_meta($id,"_hexa_upload_time","' . date('Y-m-d H:i:s') . '");'
+                . 'wp_update_post(["ID"=>$id'
+                . ($caption ? ',"post_excerpt"=>' . json_encode($caption) : '')
+                . ($description ? ',"post_content"=>' . json_encode($description) : '')
+                . ']);'
+                // Get all sizes + file path + file size
+                . '$src=wp_get_attachment_url($id);'
+                . '$file=get_attached_file($id);'
+                . '$fsize=$file&&file_exists($file)?filesize($file):0;'
+                . '$relpath=str_replace(ABSPATH,"",$file);'
+                . '$sizes_list=["thumbnail","medium","medium_large","large","full"];'
+                . '$all=["full"=>$src];'
+                . 'foreach($sizes_list as $s){$img=wp_get_attachment_image_src($id,$s);if($img) $all[$s]=$img[0];}'
+                . 'echo "HEXA_MEDIA:".json_encode(["sizes"=>$all,"file_path"=>$relpath,"file_size"=>$fsize,"media_id"=>$id]);';
+            $phpCode = base64_encode($metaPhp);
+            $metaCmd = "CODE=\$(echo '{$phpCode}' | base64 -d) && wp-toolkit --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
+            $metaOutput = trim($connection->exec($metaCmd));
 
             $sizes = [];
             $mediaUrl = '';
-            foreach (explode("\n", $sizesOutput) as $sLine) {
-                if (str_contains($sLine, 'HEXA_SIZES:')) {
-                    $json = substr($sLine, strpos($sLine, 'HEXA_SIZES:') + 11);
-                    $sizes = json_decode(trim($json), true) ?: [];
+            $filePath = '';
+            $fileSize = 0;
+            foreach (explode("\n", $metaOutput) as $sLine) {
+                if (str_contains($sLine, 'HEXA_MEDIA:')) {
+                    $json = substr($sLine, strpos($sLine, 'HEXA_MEDIA:') + 11);
+                    $parsed = json_decode(trim($json), true) ?: [];
+                    $sizes = $parsed['sizes'] ?? [];
                     $mediaUrl = $sizes['full'] ?? $sizes['large'] ?? '';
+                    $filePath = $parsed['file_path'] ?? '';
+                    $fileSize = $parsed['file_size'] ?? 0;
                     break;
                 }
             }
@@ -1314,7 +1342,18 @@ PHP;
             return [
                 'success' => true,
                 'message' => "Media uploaded (ID: {$mediaId})",
-                'data'    => ['media_id' => $mediaId, 'media_url' => $mediaUrl, 'sizes' => $sizes, 'source_url' => $imageUrl],
+                'data'    => [
+                    'media_id' => $mediaId,
+                    'media_url' => $mediaUrl,
+                    'sizes' => $sizes,
+                    'source_url' => $imageUrl,
+                    'filename' => $filename,
+                    'file_path' => $filePath,
+                    'file_size' => $fileSize,
+                    'alt_text' => $altText,
+                    'caption' => $caption,
+                    'description' => $description,
+                ],
             ];
         }
 
