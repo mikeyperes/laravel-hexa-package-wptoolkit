@@ -45,6 +45,8 @@ class WpToolkitServiceProvider extends ServiceProvider
         if (method_exists($registry, 'registerPackage')) {
             $registry->registerPackage('wptoolkit', 'hexawebsystems/laravel-hexa-package-wptoolkit', [
             'title' => 'WP Toolkit',
+            'color' => 'indigo',
+            'icon' => 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0',
             'description' => 'WordPress Toolkit sandbox and automation helpers for package-level testing.',
             'settingsRoute' => 'wptoolkit.index',
             'docsSlug' => 'wptoolkit',
