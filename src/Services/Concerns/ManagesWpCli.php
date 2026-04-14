@@ -137,13 +137,27 @@ trait ManagesWpCli
         $escapedId = escapeshellarg((string) $installId);
 
         // Download to temp file with correct filename, then import (wp-cli uses source filename otherwise)
-        $ext = pathinfo(parse_url($imageUrl, PHP_URL_PATH), PATHINFO_EXTENSION) ?: 'jpg';
+        $parsedPath = parse_url($imageUrl, PHP_URL_PATH) ?: '';
+        $ext = pathinfo($parsedPath, PATHINFO_EXTENSION) ?: 'jpg';
+        // Strip query params from extension
+        $ext = preg_replace('/[^a-zA-Z0-9].*/', '', $ext);
+        if (!in_array(strtolower($ext), ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'avif'])) $ext = 'jpg';
         $targetFilename = $filename ?: ('hexa-upload-' . uniqid() . '.' . $ext);
-        if (!str_contains($targetFilename, '.')) $targetFilename .= '.' . $ext;
+        if (!preg_match('/\.\w{2,5}$/', $targetFilename)) $targetFilename .= '.' . $ext;
         $tmpDir = '/tmp/hexa_media_' . uniqid();
         $tmpFile = $tmpDir . '/' . $targetFilename;
         $connection->exec("mkdir -p " . escapeshellarg($tmpDir));
-        $connection->exec("curl -sL -o " . escapeshellarg($tmpFile) . " " . escapeshellarg($imageUrl) . " 2>/dev/null");
+        // Use browser UA to avoid CDN blocks, follow redirects, 30s timeout
+        $curlCmd = "curl -sL --max-time 30 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o " . escapeshellarg($tmpFile) . " " . escapeshellarg($imageUrl) . " 2>/dev/null";
+        $connection->exec($curlCmd);
+        // Verify download succeeded
+        $fileSize = trim($connection->exec("stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0"));
+        if (!$fileSize || $fileSize === '0') {
+            $connection->exec("rm -rf " . escapeshellarg($tmpDir));
+            $this->generic->log('error', '[WpToolkit] Image download failed', ['url' => $imageUrl, 'filename' => $targetFilename]);
+            return ['success' => false, 'message' => 'Failed to download image from: ' . \Illuminate\Support\Str::limit($imageUrl, 100)];
+        }
+        $this->generic->log('info', '[WpToolkit] Image downloaded', ['url' => \Illuminate\Support\Str::limit($imageUrl, 100), 'size' => $fileSize, 'filename' => $targetFilename]);
 
         $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
         $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- media import " . escapeshellarg($tmpFile) . $titleArg . " --porcelain 2>&1";
