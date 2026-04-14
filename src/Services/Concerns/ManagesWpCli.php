@@ -22,7 +22,7 @@ trait ManagesWpCli
      * @param string|null $date     ISO date for scheduled posts
      * @return array{success: bool, message: string, data?: array}
      */
-    public function wpCliCreatePost(WhmServer $server, int $installId, string $title, string $content, string $status = 'draft', array $categoryIds = [], array $tagIds = [], ?string $date = null): array
+    public function wpCliCreatePost(WhmServer $server, int $installId, string $title, string $content, string $status = 'draft', array $categoryIds = [], array $tagIds = [], ?string $date = null, ?string $author = null, ?int $featuredMediaId = null): array
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -52,8 +52,24 @@ trait ManagesWpCli
         if ($date && $status === 'future') {
             $cmd .= " --post_date=" . escapeshellarg($date);
         }
+        if ($author) {
+            if (is_numeric($author)) {
+                $cmd .= " --post_author=" . escapeshellarg($author);
+            } else {
+                $userCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . " --field=ID 2>/dev/null";
+                $rawId = trim($connection->exec($userCmd));
+                $wpUserId = '';
+                foreach (explode("\n", $rawId) as $ul) { $ul = trim($ul); if (is_numeric($ul)) { $wpUserId = $ul; break; } }
+                if ($wpUserId) {
+                    $cmd .= " --post_author=" . escapeshellarg($wpUserId);
+                    $this->generic->log('info', '[WpToolkit] Resolved author', ['username' => $author, 'wp_id' => $wpUserId]);
+                } else {
+                    $this->generic->log('warning', '[WpToolkit] Author not found on WP', ['username' => $author]);
+                }
+            }
+        }
 
-        $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status]);
+        $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status, 'author' => $author]);
 
         $output = trim($connection->exec($cmd . ' 2>&1'));
 
@@ -63,11 +79,24 @@ trait ManagesWpCli
         // --porcelain returns just the post ID
         if (is_numeric($output)) {
             $postId = (int) $output;
-            $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId]);
+
+            // Set featured image if provided
+            if ($featuredMediaId) {
+                $metaCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id {$featuredMediaId} 2>&1";
+                $connection->exec($metaCmd);
+                $this->generic->log('info', '[WpToolkit] Featured image set', ['post_id' => $postId, 'media_id' => $featuredMediaId]);
+            }
+
+            // Get permalink
+            $urlCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post list --post__in={$postId} --field=url 2>&1";
+            $postUrl = trim($connection->exec($urlCmd));
+            if (!str_starts_with($postUrl, 'http')) $postUrl = null;
+
+            $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId, 'url' => $postUrl]);
             return [
                 'success' => true,
                 'message' => "Post created (ID: {$postId})",
-                'data'    => ['post_id' => $postId],
+                'data'    => ['post_id' => $postId, 'post_url' => $postUrl],
             ];
         }
 
@@ -107,10 +136,19 @@ trait ManagesWpCli
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
 
-        // Import directly from URL (wp-cli downloads it internally, avoids sandbox path issues)
+        // Download to temp file with correct filename, then import (wp-cli uses source filename otherwise)
+        $ext = pathinfo(parse_url($imageUrl, PHP_URL_PATH), PATHINFO_EXTENSION) ?: 'jpg';
+        $targetFilename = $filename ?: ('hexa-upload-' . uniqid() . '.' . $ext);
+        if (!str_contains($targetFilename, '.')) $targetFilename .= '.' . $ext;
+        $tmpDir = '/tmp/hexa_media_' . uniqid();
+        $tmpFile = $tmpDir . '/' . $targetFilename;
+        $connection->exec("mkdir -p " . escapeshellarg($tmpDir));
+        $connection->exec("curl -sL -o " . escapeshellarg($tmpFile) . " " . escapeshellarg($imageUrl) . " 2>/dev/null");
+
         $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
-        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- media import " . escapeshellarg($imageUrl) . $titleArg . " --porcelain 2>&1";
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- media import " . escapeshellarg($tmpFile) . $titleArg . " --porcelain 2>&1";
         $rawOutput = trim($connection->exec($cmd));
+        $connection->exec("rm -rf " . escapeshellarg($tmpDir));
 
         // Parse: filter out PHP warnings/deprecations, find the numeric media ID
         $output = '';
