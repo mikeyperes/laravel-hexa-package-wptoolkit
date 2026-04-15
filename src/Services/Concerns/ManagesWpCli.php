@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wptoolkit\Support\LocalShellConnection;
 use phpseclib3\Net\SSH2;
 
 /**
@@ -273,7 +274,7 @@ trait ManagesWpCli
         return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'unknown error', 300)];
     }
 
-    protected function resolveInstallPath(SSH2 $connection, int $installId): ?string
+    protected function resolveInstallPath(SSH2|LocalShellConnection $connection, int $installId): ?string
     {
         $cacheKey = (string) $installId;
         if (!empty($this->installInfoCache[$cacheKey]['fullPath'])) {
@@ -299,7 +300,7 @@ trait ManagesWpCli
         return rtrim($fullPath, '/');
     }
 
-    protected function runCommandWithExitCode(SSH2 $connection, string $cmd): array
+    protected function runCommandWithExitCode(SSH2|LocalShellConnection $connection, string $cmd): array
     {
         $marker = '__HEXA_CMD_EXIT__';
         $raw = (string) $connection->exec($cmd . '; status=$?; printf "\\n' . $marker . ':%s\\n" "$status"');

@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wptoolkit\Support\LocalShellConnection;
 use phpseclib3\Net\SSH2;
 
 /**
@@ -311,13 +312,13 @@ trait ManagesCredentials
      * the install. This retrieves them via `wp-toolkit --info`.
      * Also reads DB credentials from wp-config.php.
      *
-     * @param SSH2   $connection Active SSH connection
+     * @param SSH2|LocalShellConnection   $connection Active command connection
      * @param int    $installId  WP Toolkit install ID
      * @param string $wpPath     Full path to WordPress install
      * @param string $username   cPanel username
      * @return array{credentials: array|null, db: array|null, raw: string}
      */
-    protected function getStoredCredentials(SSH2 $connection, int $installId, string $wpPath, string $username): array
+    protected function getStoredCredentials(SSH2|LocalShellConnection $connection, int $installId, string $wpPath, string $username): array
     {
         $escapedId = escapeshellarg((string) $installId);
         $escapedPath = escapeshellarg($wpPath);
