@@ -34,6 +34,7 @@ class WpToolkitService
     protected GenericService $generic;
     protected WhmService $whm;
     protected array $sshCache = [];
+    protected array $installInfoCache = [];
 
     /**
      * @param GenericService $generic
@@ -56,20 +57,17 @@ class WpToolkitService
     {
         $key = $server->id . '_' . $server->hostname;
 
-        // Try cached connection — but verify it's usable by running a simple command
+        // Try cached connection — quick liveness test to reset channel state
         if (isset($this->sshCache[$key])) {
             $conn = $this->sshCache[$key];
             if ($conn->isConnected()) {
                 try {
-                    // Test the connection with a trivial command
-                    $conn->setTimeout(5);
-                    $test = $conn->exec('echo OK');
-                    if (trim($test) === 'OK') {
-                        $conn->setTimeout(config('wptoolkit.ssh.timeout', 60));
-                        return ['success' => true, 'connection' => $conn];
-                    }
-                } catch (\Exception $e) {
-                    // Connection is stale, fall through to reconnect
+                    $conn->setTimeout(3);
+                    $test = $conn->exec('true');
+                    $conn->setTimeout(30);
+                    return ['success' => true, 'connection' => $conn];
+                } catch (\Throwable $e) {
+                    // Stale or broken — reconnect
                 }
             }
             unset($this->sshCache[$key]);
@@ -78,7 +76,7 @@ class WpToolkitService
         // Create fresh connection
         $result = $this->sshConnect($server);
         if ($result['success'] && isset($result['connection'])) {
-            $result['connection']->setTimeout(config('wptoolkit.ssh.timeout', 60));
+            $result['connection']->setTimeout(30);
             $this->sshCache[$key] = $result['connection'];
         }
         return $result;
@@ -107,8 +105,8 @@ class WpToolkitService
         ]);
 
         try {
-            $ssh = new SSH2($hostname, $port);
-            $ssh->setTimeout($timeout);
+            $ssh = new SSH2($hostname, $port, 15); // 15 second connect timeout
+            $ssh->setTimeout(30); // cap command timeout at 30s
 
             // Try SSH key first
             if (!empty($server->ssh_private_key)) {

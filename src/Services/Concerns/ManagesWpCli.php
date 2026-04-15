@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
+use phpseclib3\Net\SSH2;
 
 /**
  * ManagesWpCli — WP-CLI operations: posts, media, categories, tags.
@@ -46,9 +47,7 @@ trait ManagesWpCli
         if (!empty($categoryIds)) {
             $cmd .= " --post_category=" . escapeshellarg(implode(',', $categoryIds));
         }
-        if (!empty($tagIds)) {
-            $cmd .= " --tags_input=" . escapeshellarg(implode(',', $tagIds));
-        }
+        // Tags set after post creation via wp_set_post_tags (--tags_input expects names, not IDs)
         if ($date && $status === 'future') {
             $cmd .= " --post_date=" . escapeshellarg($date);
         }
@@ -80,6 +79,15 @@ trait ManagesWpCli
         if (is_numeric($output)) {
             $postId = (int) $output;
 
+            // Set tags via wp_set_post_tags (IDs, not names)
+            if (!empty($tagIds)) {
+                $tagIdsStr = implode(',', array_map('intval', $tagIds));
+                $tagPhp = base64_encode('wp_set_post_tags(' . $postId . ', [' . $tagIdsStr . ']); echo "TAGS_SET";');
+                $tagCmd = "CODE=\$(echo '{$tagPhp}' | base64 -d) && wp-toolkit --wp-cli -instance-id {$escapedId} -- eval \"\$CODE\" 2>&1";
+                $connection->exec($tagCmd);
+                $this->generic->log('info', '[WpToolkit] Tags set via wp_set_post_tags', ['post_id' => $postId, 'tag_ids' => $tagIds]);
+            }
+
             // Set featured image if provided
             if ($featuredMediaId) {
                 $metaCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id {$featuredMediaId} 2>&1";
@@ -88,7 +96,7 @@ trait ManagesWpCli
             }
 
             // Get permalink
-            $urlCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post list --post__in={$postId} --field=url 2>&1";
+            $urlCmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- post get {$postId} --field=url 2>&1";
             $postUrl = trim($connection->exec($urlCmd));
             if (!str_starts_with($postUrl, 'http')) $postUrl = null;
 
@@ -135,41 +143,59 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $installPath = $this->resolveInstallPath($connection, $installId);
+        if (!$installPath) {
+            return ['success' => false, 'message' => 'Unable to resolve WordPress install path for media import'];
+        }
 
-        // Download to temp file with correct filename, then import (wp-cli uses source filename otherwise)
+        // Download inside the WordPress install path so wp-toolkit/wp-cli can actually see the file.
         $parsedPath = parse_url($imageUrl, PHP_URL_PATH) ?: '';
         $ext = pathinfo($parsedPath, PATHINFO_EXTENSION) ?: 'jpg';
-        // Strip query params from extension
         $ext = preg_replace('/[^a-zA-Z0-9].*/', '', $ext);
         if (!in_array(strtolower($ext), ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'avif'])) $ext = 'jpg';
         $targetFilename = $filename ?: ('hexa-upload-' . uniqid() . '.' . $ext);
         if (!preg_match('/\.\w{2,5}$/', $targetFilename)) $targetFilename .= '.' . $ext;
-        $tmpDir = '/tmp/hexa_media_' . uniqid();
+        $tmpDir = rtrim($installPath, '/') . '/.hexa-import-' . uniqid();
         $tmpFile = $tmpDir . '/' . $targetFilename;
         $connection->exec("mkdir -p " . escapeshellarg($tmpDir));
-        // Use browser UA to avoid CDN blocks, follow redirects, 30s timeout
-        $curlCmd = "curl -sL --max-time 30 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o " . escapeshellarg($tmpFile) . " " . escapeshellarg($imageUrl) . " 2>/dev/null";
+        $curlCmd = "curl -sL --max-time 30 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o "
+            . escapeshellarg($tmpFile)
+            . " "
+            . escapeshellarg($imageUrl)
+            . " && chmod 644 "
+            . escapeshellarg($tmpFile)
+            . " 2>/dev/null";
         $connection->exec($curlCmd);
-        // Verify download succeeded
         $fileSize = trim($connection->exec("stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0"));
         if (!$fileSize || $fileSize === '0') {
             $connection->exec("rm -rf " . escapeshellarg($tmpDir));
-            $this->generic->log('error', '[WpToolkit] Image download failed', ['url' => $imageUrl, 'filename' => $targetFilename]);
+            $this->generic->log('error', '[WpToolkit] Image download failed', [
+                'url' => $imageUrl,
+                'filename' => $targetFilename,
+                'install_path' => $installPath,
+            ]);
             return ['success' => false, 'message' => 'Failed to download image from: ' . \Illuminate\Support\Str::limit($imageUrl, 100)];
         }
         $this->generic->log('info', '[WpToolkit] Image downloaded', ['url' => \Illuminate\Support\Str::limit($imageUrl, 100), 'size' => $fileSize, 'filename' => $targetFilename]);
 
         $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
-        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- media import " . escapeshellarg($tmpFile) . $titleArg . " --porcelain 2>&1";
-        $rawOutput = trim($connection->exec($cmd));
+        $fileNameArg = $filename ? " --file_name=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
+        $altArg = $altText ? " --alt=" . escapeshellarg($altText) : '';
+        $captionArg = $caption ? " --caption=" . escapeshellarg($caption) : '';
+        $descriptionArg = $description ? " --desc=" . escapeshellarg($description) : '';
+        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- media import "
+            . escapeshellarg($tmpFile)
+            . $fileNameArg
+            . $titleArg
+            . $captionArg
+            . $altArg
+            . $descriptionArg
+            . " --porcelain 2>&1";
+        $import = $this->runCommandWithExitCode($connection, $cmd);
         $connection->exec("rm -rf " . escapeshellarg($tmpDir));
 
-        // Parse: filter out PHP warnings/deprecations, find the numeric media ID
         $output = '';
-        foreach (explode("\n", $rawOutput) as $line) {
-            $line = trim($line);
-            if (empty($line)) continue;
-            if (str_starts_with($line, 'Deprecated:') || str_starts_with($line, 'Warning:') || str_starts_with($line, 'Notice:') || str_starts_with($line, 'PHP ')) continue;
+        foreach ($import['lines'] as $line) {
             if (is_numeric($line)) {
                 $output = $line;
                 break;
@@ -236,8 +262,76 @@ trait ManagesWpCli
             ];
         }
 
-        $this->generic->log('error', '[WpToolkit] wpCliUploadMedia failed', ['output' => $output]);
-        return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+        $cleanOutput = $import['clean_output'] ?: $import['raw_output'];
+        $this->generic->log('error', '[WpToolkit] wpCliUploadMedia failed', [
+            'exit_code' => $import['exit_code'],
+            'output' => $cleanOutput,
+            'raw_output' => $import['raw_output'],
+            'install_path' => $installPath,
+            'tmp_file' => $tmpFile,
+        ]);
+        return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'unknown error', 300)];
+    }
+
+    protected function resolveInstallPath(SSH2 $connection, int $installId): ?string
+    {
+        $cacheKey = (string) $installId;
+        if (!empty($this->installInfoCache[$cacheKey]['fullPath'])) {
+            return rtrim((string) $this->installInfoCache[$cacheKey]['fullPath'], '/');
+        }
+
+        $escapedId = escapeshellarg((string) $installId);
+        $info = $this->runCommandWithExitCode($connection, "wp-toolkit --info -instance-id {$escapedId} -format json 2>&1");
+        $parsed = json_decode($info['raw_output'], true);
+        $fullPath = $parsed['fullPath'] ?? null;
+
+        if (!is_string($fullPath) || trim($fullPath) === '') {
+            $this->generic->log('error', '[WpToolkit] resolveInstallPath failed', [
+                'install_id' => $installId,
+                'exit_code' => $info['exit_code'],
+                'output' => $info['clean_output'] ?: $info['raw_output'],
+            ]);
+            return null;
+        }
+
+        $this->installInfoCache[$cacheKey] = $parsed;
+
+        return rtrim($fullPath, '/');
+    }
+
+    protected function runCommandWithExitCode(SSH2 $connection, string $cmd): array
+    {
+        $marker = '__HEXA_CMD_EXIT__';
+        $raw = (string) $connection->exec($cmd . '; status=$?; printf "\\n' . $marker . ':%s\\n" "$status"');
+
+        $exitCode = null;
+        if (preg_match('/' . preg_quote($marker, '/') . ':(\d+)/', $raw, $matches)) {
+            $exitCode = (int) $matches[1];
+            $raw = preg_replace('/\n?' . preg_quote($marker, '/') . ':\d+\s*$/', '', $raw);
+        }
+
+        $raw = trim($raw);
+        $lines = [];
+        foreach (preg_split('/\R/', $raw) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            if (str_starts_with($line, 'Deprecated:') && str_contains($line, 'Colors.php on line 95')) {
+                continue;
+            }
+            if (str_starts_with($line, 'PHP Deprecated:') && str_contains($line, 'Colors.php on line 95')) {
+                continue;
+            }
+            $lines[] = $line;
+        }
+
+        return [
+            'exit_code' => $exitCode,
+            'raw_output' => $raw,
+            'clean_output' => implode("\n", $lines),
+            'lines' => $lines,
+        ];
     }
 
     /**
@@ -430,13 +524,13 @@ trait ManagesWpCli
         $namesJson = json_encode(array_values(array_map('trim', $names)));
         $phpCode = '$names = json_decode(\'' . str_replace("'", "\\'", $namesJson) . '\', true);'
             . '$tax = \'' . $taxonomy . '\';'
-            . '$ids = [];'
+            . '$results = [];'
             . 'foreach ($names as $n) {'
             . '  $e = term_exists($n, $tax);'
-            . '  if ($e) { $ids[] = is_array($e) ? (int)$e[\'term_id\'] : (int)$e; }'
-            . '  else { $r = wp_insert_term($n, $tax); if (!is_wp_error($r)) $ids[] = (int)$r[\'term_id\']; }'
+            . '  if ($e) { $tid = is_array($e) ? (int)$e[\'term_id\'] : (int)$e; $results[] = ["id"=>$tid,"name"=>$n,"existed"=>true]; }'
+            . '  else { $r = wp_insert_term($n, $tax); if (!is_wp_error($r)) { $results[] = ["id"=>(int)$r[\'term_id\'],"name"=>$n,"existed"=>false]; } else { $results[] = ["id"=>0,"name"=>$n,"error"=>$r->get_error_message()]; } }'
             . '}'
-            . 'echo \'HEXA_RESULT:\' . json_encode($ids);';
+            . 'echo \'HEXA_RESULT:\' . json_encode($results);';
 
         $b64 = base64_encode($phpCode);
         $tmpScript = '/tmp/hexa_batch_' . uniqid() . '.sh';
@@ -451,20 +545,23 @@ trait ManagesWpCli
         $connection->exec("rm -f {$tmpScript}");
 
         // Extract JSON result from output (may contain warnings)
-        $termIds = [];
+        $results = [];
         foreach (explode("\n", $rawOutput) as $line) {
             if (str_contains($line, 'HEXA_RESULT:')) {
                 $json = substr($line, strpos($line, 'HEXA_RESULT:') + 12);
-                $termIds = json_decode(trim($json), true) ?: [];
+                $results = json_decode(trim($json), true) ?: [];
                 break;
             }
         }
 
+        // Extract term IDs (backward compat) and detailed results
+        $termIds = array_filter(array_column($results, 'id'));
         $label = $taxonomy === 'category' ? 'categories' : 'tags';
 
         return [
             'success' => true,
             'term_ids' => $termIds,
+            'term_details' => $results,
             'message' => count($termIds) . '/' . count($names) . " {$label} ready",
         ];
     }
