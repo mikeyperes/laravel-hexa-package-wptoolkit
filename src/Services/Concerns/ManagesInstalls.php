@@ -51,7 +51,7 @@ trait ManagesInstalls
         }
 
         // Get ALL installs (no user filter)
-        $cmd = "{$this->wptBinary()}--list -format json 2>&1";
+        $cmd = "{$this->wptBinary()} --list -format json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Executing command', ['command' => $cmd]);
         $output = $connection->exec($cmd);
@@ -200,7 +200,7 @@ trait ManagesInstalls
 
         // Step 3: Run wp-toolkit --list for the user
         $escapedUser = escapeshellarg($username);
-        $cmd = "{$this->wptBinary()}--list --user {$escapedUser} -format json 2>&1";
+        $cmd = "{$this->wptBinary()} --list --user {$escapedUser} -format json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Executing command', [
             'command' => $cmd,

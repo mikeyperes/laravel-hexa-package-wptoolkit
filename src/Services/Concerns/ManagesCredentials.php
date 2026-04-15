@@ -52,7 +52,7 @@ trait ManagesCredentials
         $userFields = 'ID,user_login,user_email,display_name,roles,user_registered';
 
         // Method 1: wp-toolkit --wp-cli (uses install ID)
-        $cmd = "{$this->wptBinary()}--wp-cli -instance-id {$escapedId} -- user list --fields={$userFields} --format=json 2>&1";
+        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- user list --fields={$userFields} --format=json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Trying wp-toolkit --wp-cli', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
@@ -250,7 +250,7 @@ trait ManagesCredentials
         $escapedPass = escapeshellarg($newPassword);
 
         // Method 1: wp-toolkit --wp-cli
-        $cmd = "{$this->wptBinary()}--wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
+        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
         $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
 
@@ -369,7 +369,7 @@ trait ManagesCredentials
             // Reset password via WP Toolkit CLI to get plaintext
             if ($adminLogin) {
                 $escapedLogin = escapeshellarg($adminLogin);
-                $resetCmd = "{$this->wptBinary()}--site-admin-reset-password -instance-id {$escapedId} -admin-login {$escapedLogin} 2>&1";
+                $resetCmd = "{$this->wptBinary()} --site-admin-reset-password -instance-id {$escapedId} -admin-login {$escapedLogin} 2>&1";
                 $resetOutput = trim($connection->exec($resetCmd));
                 $raw .= "RESET_PASSWORD: " . $resetOutput . "\n";
 
@@ -399,7 +399,7 @@ trait ManagesCredentials
         }
 
         // Method 2: wp-toolkit --info JSON for loginUrl and siteUrl
-        $cmd = "{$this->wptBinary()}--info -instance-id {$escapedId} -format json 2>&1";
+        $cmd = "{$this->wptBinary()} --info -instance-id {$escapedId} -format json 2>&1";
         $output = trim($connection->exec($cmd));
 
         if ($output) {
