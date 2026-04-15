@@ -4,7 +4,7 @@
 @endonce
 
 <a href="{{ route('wptoolkit.index') }}"
-   class="flex items-center px-3 py-2 rounded-lg text-sm pl-6 {{ request()->is('raw-wp-toolkit*') ? 'sidebar-active' : 'sidebar-hover' }}">
+   class="flex items-center px-3 py-2 rounded-lg text-sm pl-6 {{ request()->is('wp-toolkit*') || request()->is('raw-wp-toolkit*') ? 'sidebar-active' : 'sidebar-hover' }}">
     WP Toolkit
 </a>
 @endif

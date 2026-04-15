@@ -2,6 +2,7 @@
 
 namespace hexa_package_wptoolkit\Services;
 
+use hexa_core\Models\Setting;
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_whm\Services\WhmService;
 use hexa_core\Services\GenericService;
@@ -36,7 +37,8 @@ class WpToolkitService
     protected WhmService $whm;
     protected array $sshCache = [];
     protected array $installInfoCache = [];
-    protected ?string $resolvedBinary = null;
+    protected ?array $localProbe = null;
+    protected array $remoteProbeCache = [];
 
     /**
      * @param GenericService $generic
@@ -77,9 +79,19 @@ class WpToolkitService
         }
 
         // Create fresh connection
-        $result = $mode === 'local'
-            ? $this->localConnect($server)
-            : $this->sshConnect($server);
+        if ($mode === 'local') {
+            $localProbe = $this->probeLocalRuntime();
+            if (!($localProbe['usable'] ?? false)) {
+                return [
+                    'success' => false,
+                    'error' => $localProbe['reason'] ?? 'Local WP Toolkit execution is unavailable for the current runtime user.',
+                ];
+            }
+            $result = $this->localConnect($server);
+        } else {
+            $result = $this->sshConnect($server);
+        }
+
         if ($result['success'] && isset($result['connection'])) {
             $result['connection']->setTimeout(30);
             $this->sshCache[$key] = $result['connection'];
@@ -89,7 +101,19 @@ class WpToolkitService
 
     public function connectionMode(WhmServer $server): string
     {
-        return $this->shouldUseLocalExecution($server) ? 'local' : 'ssh';
+        $settings = $this->runtimeSettings();
+        if ($settings['mode'] === 'local') {
+            return 'local';
+        }
+        if ($settings['mode'] === 'ssh') {
+            return 'ssh';
+        }
+
+        if ($this->serverMatchesLocalHost($server) && ($this->probeLocalRuntime()['usable'] ?? false)) {
+            return 'local';
+        }
+
+        return 'ssh';
     }
 
     public function connectionLabel(WhmServer $server): string
@@ -109,10 +133,6 @@ class WpToolkitService
      */
     protected function sshConnect(WhmServer $server): array
     {
-        if ($this->shouldUseLocalExecution($server)) {
-            return $this->localConnect($server);
-        }
-
         $hostname = $server->hostname;
         $port = config('wptoolkit.ssh.port', 22);
         $timeout = config('wptoolkit.ssh.timeout', 120);
@@ -188,73 +208,384 @@ class WpToolkitService
     }
 
     /**
-     * Resolve the wp-toolkit binary path from config or known locations.
+     * Resolve the wp-toolkit binary path for the current command transport.
      *
      * @return string
      */
-    public function wptBinary(): string
+    public function wptBinary(SSH2|LocalShellConnection|null $connection = null, ?WhmServer $server = null): string
     {
-        if ($this->resolvedBinary !== null) {
-            return $this->resolvedBinary;
+        if ($connection instanceof LocalShellConnection) {
+            return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
         }
 
-        $configured = config('wptoolkit.cli.binary_path');
-        if (!empty($configured)) {
-            $this->resolvedBinary = $configured;
-            return $this->resolvedBinary;
+        if ($connection instanceof SSH2 && $server) {
+            return (string) ($this->probeRemoteRuntime($server, $connection)['selected_binary'] ?? 'wp-toolkit');
         }
 
-        // Check common cPanel locations
-        foreach (['/usr/local/bin/wp-toolkit', '/usr/sbin/wp-toolkit'] as $path) {
-            if (file_exists($path) && is_executable($path)) {
-                $this->resolvedBinary = $path;
-                return $this->resolvedBinary;
-            }
+        if ($server && $this->connectionMode($server) === 'local') {
+            return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
         }
 
-        // Fallback — bare command, rely on PATH
-        $this->resolvedBinary = 'wp-toolkit';
-        return $this->resolvedBinary;
+        if ($server) {
+            return (string) ($this->probeRemoteRuntime($server)['selected_binary'] ?? 'wp-toolkit');
+        }
+
+        return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
     }
 
-    protected function shouldUseLocalExecution(WhmServer $server): bool
+    public function shellBinary(SSH2|LocalShellConnection|null $connection = null, ?WhmServer $server = null): string
     {
-        $configuredMode = strtolower((string) config('wptoolkit.execution.mode', 'auto'));
-        if ($configuredMode === 'local') {
-            return true;
-        }
-        if ($configuredMode === 'ssh') {
-            return false;
+        return escapeshellarg($this->wptBinary($connection, $server));
+    }
+
+    public function runtimeSettings(): array
+    {
+        $mode = strtolower(trim((string) $this->settingValue('wptoolkit_execution_mode', config('wptoolkit.execution.mode', 'auto'))));
+        if (!in_array($mode, ['auto', 'local', 'ssh'], true)) {
+            $mode = 'auto';
         }
 
-        if (app()->environment('production') && (bool) config('wptoolkit.execution.force_local_in_production', true)) {
-            return true;
+        $localHostsRaw = (string) $this->settingValue(
+            'wptoolkit_local_hosts',
+            implode(',', (array) config('wptoolkit.execution.local_hosts', []))
+        );
+
+        return [
+            'mode' => $mode,
+            'local_hosts' => array_values(array_filter(array_map(
+                static fn ($host) => strtolower(trim((string) $host)),
+                explode(',', $localHostsRaw)
+            ))),
+            'local_binary_path' => $this->normalizeNullableString($this->settingValue(
+                'wptoolkit_local_binary_path',
+                config('wptoolkit.cli.local_binary_path') ?? config('wptoolkit.cli.binary_path')
+            )),
+            'remote_binary_path' => $this->normalizeNullableString($this->settingValue(
+                'wptoolkit_remote_binary_path',
+                config('wptoolkit.cli.remote_binary_path') ?? config('wptoolkit.cli.binary_path')
+            )),
+            'probe_timeout' => max(2, (int) $this->settingValue(
+                'wptoolkit_probe_timeout',
+                config('wptoolkit.diagnostics.probe_timeout', 8)
+            )),
+            'local_binary_candidates' => $this->candidatePaths('local'),
+            'remote_binary_candidates' => $this->candidatePaths('remote'),
+        ];
+    }
+
+    public function inspectCommandRuntime(WhmServer $server): array
+    {
+        $localProbe = $this->probeLocalRuntime();
+        $remoteProbe = $this->probeRemoteRuntime($server);
+        $sameHost = $this->serverMatchesLocalHost($server);
+        $transport = $this->connectionMode($server);
+
+        return [
+            'success' => true,
+            'server' => [
+                'id' => $server->id,
+                'name' => $server->name,
+                'hostname' => $server->hostname,
+                'ssh_user' => $server->ssh_admin_username ?: $server->username ?: 'root',
+                'same_host' => $sameHost,
+            ],
+            'settings' => $this->runtimeSettings(),
+            'resolution' => [
+                'transport' => $transport,
+                'label' => $this->connectionLabel($server),
+                'reason' => $this->connectionResolutionReason($server, $localProbe),
+                'selected_binary' => $transport === 'local'
+                    ? ($localProbe['selected_binary'] ?? null)
+                    : ($remoteProbe['selected_binary'] ?? null),
+            ],
+            'local_probe' => $localProbe,
+            'remote_probe' => $remoteProbe,
+        ];
+    }
+
+    protected function settingValue(string $key, mixed $default = null): mixed
+    {
+        if (class_exists(Setting::class)) {
+            return Setting::getValue($key, $default);
         }
 
-        $serverHost = strtolower(trim((string) ($server->hostname ?? '')));
+        return $default;
+    }
+
+    protected function normalizeNullableString(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+        return $value !== '' ? $value : null;
+    }
+
+    protected function candidatePaths(string $transport): array
+    {
+        $configKey = $transport === 'local'
+            ? 'wptoolkit.cli.local_binary_candidates'
+            : 'wptoolkit.cli.remote_binary_candidates';
+
+        $configuredPath = $transport === 'local'
+            ? $this->normalizeNullableString($this->settingValue(
+                'wptoolkit_local_binary_path',
+                config('wptoolkit.cli.local_binary_path') ?? config('wptoolkit.cli.binary_path')
+            ))
+            : $this->normalizeNullableString($this->settingValue(
+                'wptoolkit_remote_binary_path',
+                config('wptoolkit.cli.remote_binary_path') ?? config('wptoolkit.cli.binary_path')
+            ));
+
+        $sharedPath = $this->normalizeNullableString(config('wptoolkit.cli.binary_path'));
+        $candidates = array_merge(
+            $configuredPath ? [$configuredPath] : [],
+            $sharedPath ? [$sharedPath] : [],
+            (array) config($configKey, []),
+            ['wp-toolkit']
+        );
+
+        $normalized = [];
+        foreach ($candidates as $candidate) {
+            $candidate = trim((string) $candidate);
+            if ($candidate === '' || in_array($candidate, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $candidate;
+        }
+
+        return $normalized;
+    }
+
+    protected function serverMatchesLocalHost(WhmServer $server): bool
+    {
+        $serverHost = $this->normalizeHost($server->hostname ?? '');
         if ($serverHost === '') {
             return false;
         }
 
-        $configuredHosts = config('wptoolkit.execution.local_hosts', []);
-        if (!is_array($configuredHosts)) {
-            $configuredHosts = [];
+        return in_array($serverHost, $this->localHosts(), true);
+    }
+
+    protected function localHosts(): array
+    {
+        $settings = $this->runtimeSettings();
+
+        $merged = array_merge(
+            $settings['local_hosts'],
+            [
+                $this->normalizeHost(gethostname() ?: ''),
+                $this->normalizeHost(php_uname('n') ?: ''),
+                $this->normalizeHost((string) parse_url((string) config('app.url'), PHP_URL_HOST)),
+                '127.0.0.1',
+                'localhost',
+            ]
+        );
+
+        $hosts = [];
+        foreach ($merged as $host) {
+            $host = $this->normalizeHost($host);
+            if ($host === '' || in_array($host, $hosts, true)) {
+                continue;
+            }
+            $hosts[] = $host;
         }
 
-        $localHosts = array_values(array_filter(array_unique(array_map(
-            static fn ($value) => strtolower(trim((string) $value)),
-            array_merge(
-                $configuredHosts,
-                [
-                    gethostname() ?: '',
-                    php_uname('n') ?: '',
-                    (string) parse_url((string) config('app.url'), PHP_URL_HOST),
-                    '127.0.0.1',
-                    'localhost',
-                ]
-            )
-        ))));
+        return $hosts;
+    }
 
-        return in_array($serverHost, $localHosts, true);
+    protected function normalizeHost(string $host): string
+    {
+        return strtolower(trim($host));
+    }
+
+    protected function connectionResolutionReason(WhmServer $server, array $localProbe): string
+    {
+        $settings = $this->runtimeSettings();
+        if ($settings['mode'] === 'local') {
+            return ($localProbe['usable'] ?? false)
+                ? 'Forced local execution via WP Toolkit settings.'
+                : 'Forced local execution via WP Toolkit settings, but the current runtime user cannot execute the local WP Toolkit binary.';
+        }
+        if ($settings['mode'] === 'ssh') {
+            return 'Forced SSH execution via WP Toolkit settings.';
+        }
+
+        if ($this->serverMatchesLocalHost($server)) {
+            return ($localProbe['usable'] ?? false)
+                ? 'Auto mode selected local execution because the target host matches this app host and the runtime user can execute WP Toolkit locally.'
+                : 'Auto mode fell back to SSH because the target host matches this app host, but the runtime user cannot execute WP Toolkit locally.';
+        }
+
+        return 'Auto mode selected SSH because the target host does not match the configured local hosts.';
+    }
+
+    protected function currentRuntimeUser(): string
+    {
+        if (function_exists('posix_geteuid') && function_exists('posix_getpwuid')) {
+            $info = @posix_getpwuid(posix_geteuid());
+            if (is_array($info) && !empty($info['name'])) {
+                return (string) $info['name'];
+            }
+        }
+
+        return get_current_user() ?: 'unknown';
+    }
+
+    protected function probeLocalRuntime(): array
+    {
+        if ($this->localProbe !== null) {
+            return $this->localProbe;
+        }
+
+        $settings = $this->runtimeSettings();
+        $connection = new LocalShellConnection(base_path());
+        $connection->setTimeout((int) $settings['probe_timeout']);
+
+        $probe = [
+            'transport' => 'local',
+            'runtime_user' => $this->currentRuntimeUser(),
+            'hostname' => $this->normalizeHost(gethostname() ?: php_uname('n') ?: ''),
+            'usable' => false,
+            'selected_binary' => null,
+            'reason' => 'No executable local WP Toolkit binary was found for the current runtime user.',
+            'candidates' => [],
+        ];
+
+        foreach ($settings['local_binary_candidates'] as $candidate) {
+            $result = [
+                'path' => $candidate,
+                'exists' => null,
+                'executable' => null,
+                'exit_code' => null,
+                'version' => null,
+                'usable' => false,
+            ];
+
+            if ($candidate === 'wp-toolkit') {
+                $check = $this->runCommandWithExitCode($connection, 'command -v wp-toolkit >/dev/null 2>&1 && wp-toolkit --version 2>&1 | head -n 1');
+                $result['exists'] = null;
+                $result['executable'] = null;
+                $result['exit_code'] = $check['exit_code'];
+                $result['version'] = $check['lines'][0] ?? null;
+                $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+            } else {
+                $result['exists'] = file_exists($candidate);
+                $result['executable'] = $result['exists'] ? is_executable($candidate) : false;
+                if ($result['exists'] && $result['executable']) {
+                    $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --version 2>&1 | head -n 1');
+                    $result['exit_code'] = $check['exit_code'];
+                    $result['version'] = $check['lines'][0] ?? null;
+                    $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+                }
+            }
+
+            $probe['candidates'][] = $result;
+            if (!$probe['usable'] && $result['usable']) {
+                $probe['usable'] = true;
+                $probe['selected_binary'] = $candidate;
+                $probe['reason'] = 'Local WP Toolkit command is executable by the current runtime user.';
+            }
+        }
+
+        $this->localProbe = $probe;
+
+        return $this->localProbe;
+    }
+
+    protected function probeRemoteRuntime(WhmServer $server, ?SSH2 $existingConnection = null): array
+    {
+        $cacheKey = $server->id . ':' . $server->hostname;
+        if (isset($this->remoteProbeCache[$cacheKey])) {
+            return $this->remoteProbeCache[$cacheKey];
+        }
+
+        $settings = $this->runtimeSettings();
+        $probe = [
+            'transport' => 'ssh',
+            'connected' => false,
+            'runtime_user' => null,
+            'hostname' => $server->hostname,
+            'usable' => false,
+            'selected_binary' => null,
+            'reason' => 'SSH probe did not run.',
+            'candidates' => [],
+            'error' => null,
+        ];
+
+        $connection = $existingConnection;
+        $shouldDisconnect = false;
+        if (!$connection) {
+            $ssh = $this->sshConnect($server);
+            if (!$ssh['success']) {
+                $probe['reason'] = 'SSH connection failed.';
+                $probe['error'] = $ssh['error'] ?? 'SSH connection failed';
+                return $this->remoteProbeCache[$cacheKey] = $probe;
+            }
+
+            /** @var SSH2 $connection */
+            $connection = $ssh['connection'];
+            $shouldDisconnect = true;
+        }
+
+        $connection->setTimeout((int) $settings['probe_timeout']);
+
+        $probe['connected'] = true;
+        $probe['runtime_user'] = trim((string) $connection->exec('id -un 2>/dev/null || whoami 2>/dev/null'));
+        $remoteHostname = trim((string) $connection->exec('hostname -f 2>/dev/null || hostname 2>/dev/null'));
+        if ($remoteHostname !== '') {
+            $probe['hostname'] = $remoteHostname;
+        }
+
+        foreach ($settings['remote_binary_candidates'] as $candidate) {
+            $result = [
+                'path' => $candidate,
+                'exists' => null,
+                'executable' => null,
+                'exit_code' => null,
+                'version' => null,
+                'usable' => false,
+            ];
+
+            if ($candidate === 'wp-toolkit') {
+                $check = $this->runCommandWithExitCode($connection, 'command -v wp-toolkit >/dev/null 2>&1 && wp-toolkit --version 2>&1 | head -n 1');
+                $result['exists'] = null;
+                $result['executable'] = null;
+                $result['exit_code'] = $check['exit_code'];
+                $result['version'] = $check['lines'][0] ?? null;
+                $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+            } else {
+                $existsCheck = $this->runCommandWithExitCode(
+                    $connection,
+                    'test -e ' . escapeshellarg($candidate) . ' && printf EXISTS || printf MISSING'
+                );
+                $execCheck = $this->runCommandWithExitCode(
+                    $connection,
+                    'test -x ' . escapeshellarg($candidate) . ' && printf EXECUTABLE || printf NOT_EXECUTABLE'
+                );
+                $result['exists'] = str_contains($existsCheck['clean_output'], 'EXISTS');
+                $result['executable'] = str_contains($execCheck['clean_output'], 'EXECUTABLE');
+                if ($result['exists'] && $result['executable']) {
+                    $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --version 2>&1 | head -n 1');
+                    $result['exit_code'] = $check['exit_code'];
+                    $result['version'] = $check['lines'][0] ?? null;
+                    $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+                }
+            }
+
+            $probe['candidates'][] = $result;
+            if (!$probe['usable'] && $result['usable']) {
+                $probe['usable'] = true;
+                $probe['selected_binary'] = $candidate;
+                $probe['reason'] = 'Remote WP Toolkit command is executable over SSH.';
+            }
+        }
+
+        if ($shouldDisconnect) {
+            $connection->disconnect();
+        }
+
+        if (!$probe['usable'] && $probe['error'] === null) {
+            $probe['reason'] = 'No usable WP Toolkit binary was found for the SSH user on the target server.';
+        }
+
+        return $this->remoteProbeCache[$cacheKey] = $probe;
     }
 }
