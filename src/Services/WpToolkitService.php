@@ -9,6 +9,7 @@ use hexa_package_wptoolkit\Services\Concerns\ManagesInstalls;
 use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
 use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
+use hexa_package_wptoolkit\Support\LocalShellConnection;
 use phpseclib3\Net\SSH2;
 use phpseclib3\Crypt\PublicKeyLoader;
 
@@ -55,7 +56,8 @@ class WpToolkitService
      */
     public function getConnection(WhmServer $server): array
     {
-        $key = $server->id . '_' . $server->hostname;
+        $mode = $this->connectionMode($server);
+        $key = $mode . '_' . $server->id . '_' . $server->hostname;
 
         // Try cached connection — quick liveness test to reset channel state
         if (isset($this->sshCache[$key])) {
@@ -74,12 +76,26 @@ class WpToolkitService
         }
 
         // Create fresh connection
-        $result = $this->sshConnect($server);
+        $result = $mode === 'local'
+            ? $this->localConnect($server)
+            : $this->sshConnect($server);
         if ($result['success'] && isset($result['connection'])) {
             $result['connection']->setTimeout(30);
             $this->sshCache[$key] = $result['connection'];
         }
         return $result;
+    }
+
+    public function connectionMode(WhmServer $server): string
+    {
+        return $this->shouldUseLocalExecution($server) ? 'local' : 'ssh';
+    }
+
+    public function connectionLabel(WhmServer $server): string
+    {
+        return $this->connectionMode($server) === 'local'
+            ? 'WP Toolkit (local)'
+            : 'WP Toolkit (SSH)';
     }
 
     /**
@@ -92,6 +108,10 @@ class WpToolkitService
      */
     protected function sshConnect(WhmServer $server): array
     {
+        if ($this->shouldUseLocalExecution($server)) {
+            return $this->localConnect($server);
+        }
+
         $hostname = $server->hostname;
         $port = config('wptoolkit.ssh.port', 22);
         $timeout = config('wptoolkit.ssh.timeout', 120);
@@ -148,5 +168,62 @@ class WpToolkitService
                 'error'   => 'SSH connection failed: ' . $e->getMessage(),
             ];
         }
+    }
+
+    protected function localConnect(WhmServer $server): array
+    {
+        $this->generic->log('info', '[WpToolkit] Local execution selected', [
+            'hostname' => $server->hostname,
+            'mode' => 'local',
+        ]);
+
+        $connection = new LocalShellConnection(base_path());
+        $connection->setTimeout((int) config('wptoolkit.ssh.timeout', 30));
+
+        return [
+            'success' => true,
+            'connection' => $connection,
+        ];
+    }
+
+    protected function shouldUseLocalExecution(WhmServer $server): bool
+    {
+        $configuredMode = strtolower((string) config('wptoolkit.execution.mode', 'auto'));
+        if ($configuredMode === 'local') {
+            return true;
+        }
+        if ($configuredMode === 'ssh') {
+            return false;
+        }
+
+        if (app()->environment('production') && (bool) config('wptoolkit.execution.force_local_in_production', true)) {
+            return true;
+        }
+
+        $serverHost = strtolower(trim((string) ($server->hostname ?? '')));
+        if ($serverHost === '') {
+            return false;
+        }
+
+        $configuredHosts = config('wptoolkit.execution.local_hosts', []);
+        if (!is_array($configuredHosts)) {
+            $configuredHosts = [];
+        }
+
+        $localHosts = array_values(array_filter(array_unique(array_map(
+            static fn ($value) => strtolower(trim((string) $value)),
+            array_merge(
+                $configuredHosts,
+                [
+                    gethostname() ?: '',
+                    php_uname('n') ?: '',
+                    (string) parse_url((string) config('app.url'), PHP_URL_HOST),
+                    '127.0.0.1',
+                    'localhost',
+                ]
+            )
+        ))));
+
+        return in_array($serverHost, $localHosts, true);
     }
 }
