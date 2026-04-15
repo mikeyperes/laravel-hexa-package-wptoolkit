@@ -32,12 +32,11 @@ trait ManagesLogins
             'wp_user' => $wpUser,
         ]);
 
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return $ssh;
         }
 
-        /** @var SSH2 $connection */
         $connection = $ssh['connection'];
 
         $token = bin2hex(random_bytes(32));
@@ -220,15 +219,16 @@ PHP;
      * @param string $username   cPanel username
      * @return array{url: string|null, raw: string}
      */
-    protected function detectCustomLoginUrl(SSH2|LocalShellConnection $connection, int $installId, string $wpPath, string $username): array
+    protected function detectCustomLoginUrl(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId, string $wpPath, string $username): array
     {
         $escapedId = escapeshellarg((string) $installId);
         $escapedPath = escapeshellarg($wpPath);
         $escapedUser = escapeshellarg($username);
+        $wptBin = $this->shellBinary($connection, $server);
         $raw = '';
 
         // Check WPS Hide Login (most common)
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- option get whl_page 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- option get whl_page 2>&1";
         $output = trim($connection->exec($cmd));
         $raw .= "whl_page: {$output}\n";
 

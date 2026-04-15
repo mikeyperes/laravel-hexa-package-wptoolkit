@@ -25,16 +25,15 @@ trait ManagesInstalls
             'hostname' => $server->hostname,
         ]);
 
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return $ssh;
         }
 
-        /** @var SSH2 $connection */
         $connection = $ssh['connection'];
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Check if wp-toolkit is available
-        $wptBin = $this->wptBinary();
         $checkCmd = "which {$wptBin} 2>/dev/null && echo \"WPT_FOUND\" || echo \"WPT_NOT_FOUND\"";
         $checkOutput = trim($connection->exec($checkCmd));
 
@@ -51,7 +50,7 @@ trait ManagesInstalls
         }
 
         // Get ALL installs (no user filter)
-        $cmd = "{$this->wptBinary()} --list -format json 2>&1";
+        $cmd = "{$wptBin} --list -format json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Executing command', ['command' => $cmd]);
         $output = $connection->exec($cmd);
@@ -173,16 +172,15 @@ trait ManagesInstalls
         ]);
 
         // Step 1: Connect via SSH
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return $ssh;
         }
 
-        /** @var SSH2 $connection */
         $connection = $ssh['connection'];
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Step 2: Check if wp-toolkit is available
-        $wptBin = $this->wptBinary();
         $checkCmd = "which {$wptBin} 2>/dev/null && echo \"WPT_FOUND\" || echo \"WPT_NOT_FOUND\"";
         $checkOutput = trim($connection->exec($checkCmd));
 
@@ -200,7 +198,7 @@ trait ManagesInstalls
 
         // Step 3: Run wp-toolkit --list for the user
         $escapedUser = escapeshellarg($username);
-        $cmd = "{$this->wptBinary()} --list --user {$escapedUser} -format json 2>&1";
+        $cmd = "{$wptBin} --list --user {$escapedUser} -format json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Executing command', [
             'command' => $cmd,

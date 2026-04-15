@@ -36,13 +36,13 @@ trait ManagesCredentials
             'username'   => $username,
         ]);
 
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return $ssh;
         }
 
-        /** @var SSH2 $connection */
         $connection = $ssh['connection'];
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Try wp-toolkit --wp-cli first, fall back to direct wp-cli
         $escapedId = escapeshellarg((string) $installId);
@@ -52,7 +52,7 @@ trait ManagesCredentials
         $userFields = 'ID,user_login,user_email,display_name,roles,user_registered';
 
         // Method 1: wp-toolkit --wp-cli (uses install ID)
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- user list --fields={$userFields} --format=json 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user list --fields={$userFields} --format=json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Trying wp-toolkit --wp-cli', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
@@ -89,7 +89,7 @@ trait ManagesCredentials
         }
 
         // Get stored credentials, DB creds, and login URL from WP Toolkit
-        $storedCreds = $this->getStoredCredentials($connection, $installId, $wpPath, $username);
+        $storedCreds = $this->getStoredCredentials($server, $connection, $installId, $wpPath, $username);
         $output .= "\n---STORED_CREDS---\n" . ($storedCreds['raw'] ?? '');
 
         $connection->disconnect();
@@ -232,13 +232,13 @@ trait ManagesCredentials
             'wp_user'    => $wpUser,
         ]);
 
-        $ssh = $this->sshConnect($server);
+        $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return $ssh;
         }
 
-        /** @var SSH2 $connection */
         $connection = $ssh['connection'];
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Generate a random password
         $newPassword = bin2hex(random_bytes(12));
@@ -250,7 +250,7 @@ trait ManagesCredentials
         $escapedPass = escapeshellarg($newPassword);
 
         // Method 1: wp-toolkit --wp-cli
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
         $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
 
@@ -318,11 +318,12 @@ trait ManagesCredentials
      * @param string $username   cPanel username
      * @return array{credentials: array|null, db: array|null, raw: string}
      */
-    protected function getStoredCredentials(SSH2|LocalShellConnection $connection, int $installId, string $wpPath, string $username): array
+    protected function getStoredCredentials(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId, string $wpPath, string $username): array
     {
         $escapedId = escapeshellarg((string) $installId);
         $escapedPath = escapeshellarg($wpPath);
         $escapedUser = escapeshellarg($username);
+        $wptBin = $this->shellBinary($connection, $server);
         $raw = '';
         $credentials = null;
         $dbCreds = null;
@@ -369,7 +370,7 @@ trait ManagesCredentials
             // Reset password via WP Toolkit CLI to get plaintext
             if ($adminLogin) {
                 $escapedLogin = escapeshellarg($adminLogin);
-                $resetCmd = "{$this->wptBinary()} --site-admin-reset-password -instance-id {$escapedId} -admin-login {$escapedLogin} 2>&1";
+                $resetCmd = "{$wptBin} --site-admin-reset-password -instance-id {$escapedId} -admin-login {$escapedLogin} 2>&1";
                 $resetOutput = trim($connection->exec($resetCmd));
                 $raw .= "RESET_PASSWORD: " . $resetOutput . "\n";
 
@@ -399,7 +400,7 @@ trait ManagesCredentials
         }
 
         // Method 2: wp-toolkit --info JSON for loginUrl and siteUrl
-        $cmd = "{$this->wptBinary()} --info -instance-id {$escapedId} -format json 2>&1";
+        $cmd = "{$wptBin} --info -instance-id {$escapedId} -format json 2>&1";
         $output = trim($connection->exec($cmd));
 
         if ($output) {

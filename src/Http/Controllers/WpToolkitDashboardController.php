@@ -3,8 +3,9 @@
 namespace hexa_package_wptoolkit\Http\Controllers;
 
 use hexa_core\Http\Controllers\Controller;
+use hexa_core\Models\Setting;
+use hexa_package_whm\Models\HostingAccount;
 use hexa_package_whm\Models\WhmServer;
-use hexa_package_hosting\Models\HostingAccount;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -32,9 +33,28 @@ class WpToolkitDashboardController extends Controller
     public function index()
     {
         $servers = WhmServer::where('is_active', true)->get();
+        $publishSites = collect();
+
+        $publishSiteModel = 'hexa_app_publish\\Publishing\\Sites\\Models\\PublishSite';
+        if (class_exists($publishSiteModel)) {
+            $publishSites = $publishSiteModel::query()
+                ->where('connection_type', 'wptoolkit')
+                ->orderBy('name')
+                ->get([
+                    'id',
+                    'name',
+                    'url',
+                    'hosting_account_id',
+                    'wordpress_install_id',
+                    'status',
+                    'last_error',
+                ]);
+        }
 
         return view('wptoolkit::dashboard.index', [
             'servers' => $servers,
+            'publishSites' => $publishSites,
+            'settings' => $this->wpToolkit->runtimeSettings(),
         ]);
     }
 
@@ -247,5 +267,90 @@ class WpToolkitDashboardController extends Controller
         $result = $this->wpToolkit->generateWhmResellerLoginUrl($server, $request->input('username'));
 
         return response()->json($result);
+    }
+
+    public function saveSettings(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'mode' => 'required|string|in:auto,ssh,local',
+            'local_hosts' => 'nullable|string|max:5000',
+            'local_binary_path' => 'nullable|string|max:1000',
+            'remote_binary_path' => 'nullable|string|max:1000',
+            'probe_timeout' => 'required|integer|min:2|max:60',
+        ]);
+
+        Setting::setValue('wptoolkit_execution_mode', $validated['mode'], 'wptoolkit');
+        Setting::setValue('wptoolkit_local_hosts', trim((string) ($validated['local_hosts'] ?? '')), 'wptoolkit');
+        Setting::setValue('wptoolkit_local_binary_path', trim((string) ($validated['local_binary_path'] ?? '')), 'wptoolkit');
+        Setting::setValue('wptoolkit_remote_binary_path', trim((string) ($validated['remote_binary_path'] ?? '')), 'wptoolkit');
+        Setting::setValue('wptoolkit_probe_timeout', (string) $validated['probe_timeout'], 'wptoolkit');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'WP Toolkit command settings saved.',
+            'settings' => $this->wpToolkit->runtimeSettings(),
+        ]);
+    }
+
+    public function serverDiagnostics(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id' => 'required|integer|exists:whm_servers,id',
+        ]);
+
+        $server = WhmServer::findOrFail((int) $request->input('server_id'));
+
+        return response()->json($this->wpToolkit->inspectCommandRuntime($server));
+    }
+
+    public function siteCommandTest(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'site_id' => 'required|integer',
+            'test' => 'required|string|in:write,authors,categories',
+        ]);
+
+        $publishSiteModel = 'hexa_app_publish\\Publishing\\Sites\\Models\\PublishSite';
+        if (!class_exists($publishSiteModel)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Publish app is not installed, so site command tests are unavailable.',
+            ], 422);
+        }
+
+        $site = $publishSiteModel::query()->findOrFail((int) $validated['site_id']);
+        $account = HostingAccount::find($site->hosting_account_id);
+        $server = $account ? WhmServer::find($account->whm_server_id) : null;
+
+        if (!$server || !$site->wordpress_install_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Site is missing a server or WordPress install ID.',
+            ], 422);
+        }
+
+        $result = match ($validated['test']) {
+            'write' => $this->wpToolkit->wpCliTestWriteAccess($server, (int) $site->wordpress_install_id),
+            'authors' => $this->wpToolkit->wpCliListAdminUsers($server, (int) $site->wordpress_install_id),
+            'categories' => $this->wpToolkit->wpCliListCategories($server, (int) $site->wordpress_install_id),
+        };
+
+        return response()->json([
+            'success' => (bool) ($result['success'] ?? false),
+            'test' => $validated['test'],
+            'site' => [
+                'id' => $site->id,
+                'name' => $site->name,
+                'url' => $site->url,
+                'install_id' => $site->wordpress_install_id,
+            ],
+            'server' => [
+                'id' => $server->id,
+                'name' => $server->name,
+                'hostname' => $server->hostname,
+            ],
+            'runtime' => $this->wpToolkit->inspectCommandRuntime($server),
+            'result' => $result,
+        ]);
     }
 }

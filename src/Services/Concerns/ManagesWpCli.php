@@ -33,13 +33,14 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Write content to temp file on server (avoids shell escaping issues with HTML)
         $tmpFile = '/tmp/hexa_wp_post_' . uniqid() . '.html';
         $connection->exec('cat > ' . escapeshellarg($tmpFile) . ' << \'HEXAEOF\'' . "\n" . $content . "\nHEXAEOF");
 
         // Build wp post create command
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post create"
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post create"
             . " --post_title=" . escapeshellarg($title)
             . " --post_status=" . escapeshellarg($status)
             . " --post_content=\"$(cat " . escapeshellarg($tmpFile) . ")\""
@@ -56,7 +57,7 @@ trait ManagesWpCli
             if (is_numeric($author)) {
                 $cmd .= " --post_author=" . escapeshellarg($author);
             } else {
-                $userCmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . " --field=ID 2>/dev/null";
+                $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . " --field=ID 2>/dev/null";
                 $rawId = trim($connection->exec($userCmd));
                 $wpUserId = '';
                 foreach (explode("\n", $rawId) as $ul) { $ul = trim($ul); if (is_numeric($ul)) { $wpUserId = $ul; break; } }
@@ -84,20 +85,20 @@ trait ManagesWpCli
             if (!empty($tagIds)) {
                 $tagIdsStr = implode(',', array_map('intval', $tagIds));
                 $tagPhp = base64_encode('wp_set_post_tags(' . $postId . ', [' . $tagIdsStr . ']); echo "TAGS_SET";');
-                $tagCmd = "CODE=\$(echo '{$tagPhp}' | base64 -d) && {$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- eval \"\$CODE\" 2>&1";
+                $tagCmd = "CODE=\$(echo '{$tagPhp}' | base64 -d) && {$wptBin} --wp-cli -instance-id {$escapedId} -- eval \"\$CODE\" 2>&1";
                 $connection->exec($tagCmd);
                 $this->generic->log('info', '[WpToolkit] Tags set via wp_set_post_tags', ['post_id' => $postId, 'tag_ids' => $tagIds]);
             }
 
             // Set featured image if provided
             if ($featuredMediaId) {
-                $metaCmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id {$featuredMediaId} 2>&1";
+                $metaCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id {$featuredMediaId} 2>&1";
                 $connection->exec($metaCmd);
                 $this->generic->log('info', '[WpToolkit] Featured image set', ['post_id' => $postId, 'media_id' => $featuredMediaId]);
             }
 
             // Get permalink
-            $urlCmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post get {$postId} --field=url 2>&1";
+            $urlCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post get {$postId} --field=url 2>&1";
             $postUrl = trim($connection->exec($urlCmd));
             if (!str_starts_with($postUrl, 'http')) $postUrl = null;
 
@@ -144,7 +145,8 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
-        $installPath = $this->resolveInstallPath($connection, $installId);
+        $wptBin = $this->shellBinary($connection, $server);
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
         if (!$installPath) {
             return ['success' => false, 'message' => 'Unable to resolve WordPress install path for media import'];
         }
@@ -184,7 +186,7 @@ trait ManagesWpCli
         $altArg = $altText ? " --alt=" . escapeshellarg($altText) : '';
         $captionArg = $caption ? " --caption=" . escapeshellarg($caption) : '';
         $descriptionArg = $description ? " --desc=" . escapeshellarg($description) : '';
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- media import "
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- media import "
             . escapeshellarg($tmpFile)
             . $fileNameArg
             . $titleArg
@@ -225,7 +227,7 @@ trait ManagesWpCli
                 . 'foreach($sizes_list as $s){$img=wp_get_attachment_image_src($id,$s);if($img) $all[$s]=$img[0];}'
                 . 'echo "HEXA_MEDIA:".json_encode(["sizes"=>$all,"file_path"=>$relpath,"file_size"=>$fsize,"media_id"=>$id]);';
             $phpCode = base64_encode($metaPhp);
-            $metaCmd = "CODE=\$(echo '{$phpCode}' | base64 -d) && {$this->wptBinary()} --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
+            $metaCmd = "CODE=\$(echo '{$phpCode}' | base64 -d) && {$wptBin} --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
             $metaOutput = trim($connection->exec($metaCmd));
 
             $sizes = [];
@@ -274,7 +276,7 @@ trait ManagesWpCli
         return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'unknown error', 300)];
     }
 
-    protected function resolveInstallPath(SSH2|LocalShellConnection $connection, int $installId): ?string
+    protected function resolveInstallPath(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): ?string
     {
         $cacheKey = (string) $installId;
         if (!empty($this->installInfoCache[$cacheKey]['fullPath'])) {
@@ -282,7 +284,7 @@ trait ManagesWpCli
         }
 
         $escapedId = escapeshellarg((string) $installId);
-        $info = $this->runCommandWithExitCode($connection, "{$this->wptBinary()} --info -instance-id {$escapedId} -format json 2>&1");
+        $info = $this->runCommandWithExitCode($connection, $this->shellBinary($connection, $server) . " --info -instance-id {$escapedId} -format json 2>&1");
         $parsed = json_decode($info['raw_output'], true);
         $fullPath = $parsed['fullPath'] ?? null;
 
@@ -352,9 +354,10 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Check if category exists first
-        $checkCmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- term list category --field=term_id --name=" . escapeshellarg($name) . " --format=csv 2>&1";
+        $checkCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- term list category --field=term_id --name=" . escapeshellarg($name) . " --format=csv 2>&1";
         $existing = trim($connection->exec($checkCmd));
         $lines = array_filter(explode("\n", $existing), fn($l) => is_numeric(trim($l)));
         if (!empty($lines)) {
@@ -363,7 +366,7 @@ trait ManagesWpCli
         }
 
         // Create it
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- term create category " . escapeshellarg($name) . " --porcelain 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- term create category " . escapeshellarg($name) . " --porcelain 2>&1";
         $output = trim($connection->exec($cmd));
 
         if (is_numeric($output)) {
@@ -390,9 +393,10 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Check if tag exists
-        $checkCmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- term list post_tag --field=term_id --name=" . escapeshellarg($name) . " --format=csv 2>&1";
+        $checkCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- term list post_tag --field=term_id --name=" . escapeshellarg($name) . " --format=csv 2>&1";
         $existing = trim($connection->exec($checkCmd));
         $lines = array_filter(explode("\n", $existing), fn($l) => is_numeric(trim($l)));
         if (!empty($lines)) {
@@ -401,7 +405,7 @@ trait ManagesWpCli
         }
 
         // Create it
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- term create post_tag " . escapeshellarg($name) . " --porcelain 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- term create post_tag " . escapeshellarg($name) . " --porcelain 2>&1";
         $output = trim($connection->exec($cmd));
 
         if (is_numeric($output)) {
@@ -428,9 +432,10 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
 
         // Get admin user info first
-        $userCmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=user_login,display_name --format=csv 2>&1";
+        $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=user_login,display_name --format=csv 2>&1";
         $userOutput = trim($connection->exec($userCmd));
         $adminUser = '';
         $adminDisplay = '';
@@ -446,7 +451,7 @@ trait ManagesWpCli
         }
 
         // Create a test post
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post create --post_title='Hexa Write Test' --post_status=draft --porcelain 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post create --post_title='Hexa Write Test' --post_status=draft --porcelain 2>&1";
         $output = trim($connection->exec($cmd));
 
         // Filter warnings
@@ -456,7 +461,7 @@ trait ManagesWpCli
 
         if (is_numeric($output)) {
             $postId = (int) $output;
-            $connection->exec("{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post delete {$postId} --force 2>&1");
+            $connection->exec("{$wptBin} --wp-cli -instance-id {$escapedId} -- post delete {$postId} --force 2>&1");
             return [
                 'success' => true,
                 'message' => "WordPress connection established — write access confirmed as {$adminDisplay} ({$adminUser}), administrator",
@@ -467,6 +472,69 @@ trait ManagesWpCli
         }
 
         return ['success' => false, 'message' => 'Write test failed: ' . \Illuminate\Support\Str::limit($output, 200)];
+    }
+
+    public function wpCliListAdminUsers(WhmServer $server, int $installId): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'authors' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
+        $output = trim($connection->exec("{$wptBin} --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=user_login,display_name --format=json 2>/dev/null"));
+
+        $authors = [];
+        foreach (explode("\n", $output) as $line) {
+            $line = trim($line);
+            if (str_starts_with($line, '[') || str_starts_with($line, '{')) {
+                $authors = json_decode($line, true) ?: [];
+                break;
+            }
+        }
+
+        if (!is_array($authors)) {
+            return ['success' => false, 'authors' => [], 'message' => 'Failed to parse WP users.'];
+        }
+
+        return ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' administrator users loaded.'];
+    }
+
+    public function wpCliListCategories(WhmServer $server, int $installId): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'categories' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
+        $output = trim($connection->exec("{$wptBin} --wp-cli -instance-id {$escapedId} -- term list category --fields=term_id,name,slug,count --format=json 2>/dev/null"));
+
+        $categories = [];
+        foreach (explode("\n", $output) as $line) {
+            $line = trim($line);
+            if (str_starts_with($line, '[') || str_starts_with($line, '{')) {
+                $categories = json_decode($line, true) ?: [];
+                break;
+            }
+        }
+
+        if (!is_array($categories)) {
+            return ['success' => false, 'categories' => [], 'message' => 'Failed to parse categories.'];
+        }
+
+        $result = array_map(static fn ($category) => [
+            'id' => (int) ($category['term_id'] ?? 0),
+            'name' => $category['name'] ?? '',
+            'slug' => $category['slug'] ?? '',
+            'count' => (int) ($category['count'] ?? 0),
+        ], $categories);
+
+        return ['success' => true, 'categories' => $result, 'message' => count($result) . ' categories loaded.'];
     }
 
     /**
@@ -518,6 +586,7 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
         $escapedTax = escapeshellarg($taxonomy);
 
         // Build a shell script that passes PHP to wp-toolkit eval via a variable
@@ -535,7 +604,6 @@ trait ManagesWpCli
 
         $b64 = base64_encode($phpCode);
         $tmpScript = '/tmp/hexa_batch_' . uniqid() . '.sh';
-        $wptBin = $this->wptBinary();
         $scriptContent = "#!/bin/bash\nCODE=\$(echo '{$b64}' | base64 -d)\n{$wptBin} --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
         $connection->exec("echo " . escapeshellarg($scriptContent) . " > {$tmpScript} && chmod +x {$tmpScript}");
 
@@ -586,8 +654,9 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
         $forceFlag = $force ? ' --force' : '';
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post delete {$postId}{$forceFlag} 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post delete {$postId}{$forceFlag} 2>&1";
         $output = trim($connection->exec($cmd));
 
         // Filter warnings
@@ -623,8 +692,9 @@ trait ManagesWpCli
 
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
         $forceFlag = $force ? ' --force' : '';
-        $cmd = "{$this->wptBinary()} --wp-cli -instance-id {$escapedId} -- post delete {$mediaId}{$forceFlag} 2>&1";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post delete {$mediaId}{$forceFlag} 2>&1";
         $output = trim($connection->exec($cmd));
 
         $clean = '';
