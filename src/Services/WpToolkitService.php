@@ -36,6 +36,7 @@ class WpToolkitService
     protected WhmService $whm;
     protected array $sshCache = [];
     protected array $installInfoCache = [];
+    protected ?string $resolvedBinary = null;
 
     /**
      * @param GenericService $generic
@@ -184,6 +185,36 @@ class WpToolkitService
             'success' => true,
             'connection' => $connection,
         ];
+    }
+
+    /**
+     * Resolve the wp-toolkit binary path from config or known locations.
+     *
+     * @return string
+     */
+    public function wptBinary(): string
+    {
+        if ($this->resolvedBinary !== null) {
+            return $this->resolvedBinary;
+        }
+
+        $configured = config('wptoolkit.cli.binary_path');
+        if (!empty($configured)) {
+            $this->resolvedBinary = $configured;
+            return $this->resolvedBinary;
+        }
+
+        // Check common cPanel locations
+        foreach (['/usr/local/bin/wp-toolkit', '/usr/sbin/wp-toolkit'] as $path) {
+            if (file_exists($path) && is_executable($path)) {
+                $this->resolvedBinary = $path;
+                return $this->resolvedBinary;
+            }
+        }
+
+        // Fallback — bare command, rely on PATH
+        $this->resolvedBinary = 'wp-toolkit';
+        return $this->resolvedBinary;
     }
 
     protected function shouldUseLocalExecution(WhmServer $server): bool

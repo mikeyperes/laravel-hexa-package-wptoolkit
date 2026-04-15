@@ -228,7 +228,7 @@ PHP;
         $raw = '';
 
         // Check WPS Hide Login (most common)
-        $cmd = "wp-toolkit --wp-cli -instance-id {$escapedId} -- option get whl_page 2>&1";
+        $cmd = "{$this->wptBinary()}--wp-cli -instance-id {$escapedId} -- option get whl_page 2>&1";
         $output = trim($connection->exec($cmd));
         $raw .= "whl_page: {$output}\n";
 
