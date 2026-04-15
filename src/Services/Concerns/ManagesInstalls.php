@@ -34,7 +34,8 @@ trait ManagesInstalls
         $connection = $ssh['connection'];
 
         // Check if wp-toolkit is available
-        $checkCmd = 'which wp-toolkit 2>/dev/null && echo "WPT_FOUND" || echo "WPT_NOT_FOUND"';
+        $wptBin = $this->wptBinary();
+        $checkCmd = "which {$wptBin} 2>/dev/null && echo \"WPT_FOUND\" || echo \"WPT_NOT_FOUND\"";
         $checkOutput = trim($connection->exec($checkCmd));
 
         if (str_contains($checkOutput, 'WPT_NOT_FOUND')) {
@@ -50,7 +51,7 @@ trait ManagesInstalls
         }
 
         // Get ALL installs (no user filter)
-        $cmd = "wp-toolkit --list -format json 2>&1";
+        $cmd = "{$this->wptBinary()}--list -format json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Executing command', ['command' => $cmd]);
         $output = $connection->exec($cmd);
@@ -181,7 +182,8 @@ trait ManagesInstalls
         $connection = $ssh['connection'];
 
         // Step 2: Check if wp-toolkit is available
-        $checkCmd = 'which wp-toolkit 2>/dev/null && echo "WPT_FOUND" || echo "WPT_NOT_FOUND"';
+        $wptBin = $this->wptBinary();
+        $checkCmd = "which {$wptBin} 2>/dev/null && echo \"WPT_FOUND\" || echo \"WPT_NOT_FOUND\"";
         $checkOutput = trim($connection->exec($checkCmd));
 
         if (str_contains($checkOutput, 'WPT_NOT_FOUND')) {
@@ -198,7 +200,7 @@ trait ManagesInstalls
 
         // Step 3: Run wp-toolkit --list for the user
         $escapedUser = escapeshellarg($username);
-        $cmd = "wp-toolkit --list --user {$escapedUser} -format json 2>&1";
+        $cmd = "{$this->wptBinary()}--list --user {$escapedUser} -format json 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Executing command', [
             'command' => $cmd,
