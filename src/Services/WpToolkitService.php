@@ -50,6 +50,50 @@ class WpToolkitService
         $this->whm = $whm;
     }
 
+    public function commandTimeoutSeconds(): int
+    {
+        return max(10, (int) config('wptoolkit.ssh.timeout', 120));
+    }
+
+    protected function connectionCacheKey(WhmServer $server): string
+    {
+        return $this->connectionMode($server) . '_' . $server->id . '_' . $server->hostname;
+    }
+
+    public function disconnectCachedConnection(?WhmServer $server = null, SSH2|LocalShellConnection|null $connection = null): void
+    {
+        if ($server) {
+            $key = $this->connectionCacheKey($server);
+            if (!isset($this->sshCache[$key])) {
+                return;
+            }
+
+            try {
+                $this->sshCache[$key]->disconnect();
+            } catch (\Throwable) {
+                // Best effort cleanup only.
+            }
+
+            unset($this->sshCache[$key]);
+
+            return;
+        }
+
+        foreach ($this->sshCache as $key => $cachedConnection) {
+            if ($connection && $cachedConnection !== $connection) {
+                continue;
+            }
+
+            try {
+                $cachedConnection->disconnect();
+            } catch (\Throwable) {
+                // Best effort cleanup only.
+            }
+
+            unset($this->sshCache[$key]);
+        }
+    }
+
     /**
      * Get or create a cached SSH connection for a server.
      * Reuses existing connections to avoid reconnecting for every operation.
@@ -59,8 +103,7 @@ class WpToolkitService
      */
     public function getConnection(WhmServer $server): array
     {
-        $mode = $this->connectionMode($server);
-        $key = $mode . '_' . $server->id . '_' . $server->hostname;
+        $key = $this->connectionCacheKey($server);
 
         // Try cached connection — quick liveness test to reset channel state
         if (isset($this->sshCache[$key])) {
@@ -68,18 +111,18 @@ class WpToolkitService
             if ($conn->isConnected()) {
                 try {
                     $conn->setTimeout(3);
-                    $test = $conn->exec('true');
-                    $conn->setTimeout(30);
+                    $conn->exec('true');
+                    $conn->setTimeout($this->commandTimeoutSeconds());
                     return ['success' => true, 'connection' => $conn];
                 } catch (\Throwable $e) {
                     // Stale or broken — reconnect
                 }
             }
-            unset($this->sshCache[$key]);
+            $this->disconnectCachedConnection($server);
         }
 
         // Create fresh connection
-        if ($mode === 'local') {
+        if ($this->connectionMode($server) === 'local') {
             $localProbe = $this->probeLocalRuntime();
             if (!($localProbe['usable'] ?? false)) {
                 return [
@@ -93,7 +136,7 @@ class WpToolkitService
         }
 
         if ($result['success'] && isset($result['connection'])) {
-            $result['connection']->setTimeout(30);
+            $result['connection']->setTimeout($this->commandTimeoutSeconds());
             $this->sshCache[$key] = $result['connection'];
         }
         return $result;
@@ -135,7 +178,8 @@ class WpToolkitService
     {
         $hostname = $server->hostname;
         $port = config('wptoolkit.ssh.port', 22);
-        $timeout = config('wptoolkit.ssh.timeout', 120);
+        $timeout = $this->commandTimeoutSeconds();
+        $connectTimeout = max(10, min($timeout, 30));
         $username = $server->ssh_admin_username ?: $server->username ?: 'root';
 
         $this->generic->log('info', '[WpToolkit] SSH connecting', [
@@ -146,8 +190,8 @@ class WpToolkitService
         ]);
 
         try {
-            $ssh = new SSH2($hostname, $port, 15); // 15 second connect timeout
-            $ssh->setTimeout(30); // cap command timeout at 30s
+            $ssh = new SSH2($hostname, $port, $connectTimeout);
+            $ssh->setTimeout($timeout);
 
             // Try SSH key first
             if (!empty($server->ssh_private_key)) {
@@ -199,7 +243,7 @@ class WpToolkitService
         ]);
 
         $connection = new LocalShellConnection(base_path());
-        $connection->setTimeout((int) config('wptoolkit.ssh.timeout', 30));
+        $connection->setTimeout($this->commandTimeoutSeconds());
 
         return [
             'success' => true,
