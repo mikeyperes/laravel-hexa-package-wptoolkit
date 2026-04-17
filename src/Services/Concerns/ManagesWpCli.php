@@ -4,6 +4,7 @@ namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
+use Illuminate\Support\Facades\Cache;
 use phpseclib3\Net\SSH2;
 
 /**
@@ -508,6 +509,12 @@ trait ManagesWpCli
 
     public function wpCliListAdminUsers(WhmServer $server, int $installId): array
     {
+        $cacheKey = 'wptoolkit:publish-authors:' . $server->id . ':' . $installId;
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'authors' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
@@ -559,7 +566,10 @@ PHP;
             return ['success' => false, 'authors' => [], 'message' => 'Failed to parse WP users.'];
         }
 
-        return ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' publish-capable users loaded.'];
+        $result = ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' publish-capable users loaded.'];
+        Cache::put($cacheKey, $result, now()->addMinutes(10));
+
+        return $result;
     }
 
     public function wpCliListCategories(WhmServer $server, int $installId): array
