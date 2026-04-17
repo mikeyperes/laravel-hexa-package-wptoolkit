@@ -138,6 +138,8 @@ trait ManagesWpCli
      */
     public function wpCliUploadMedia(WhmServer $server, int $installId, string $imageUrl, string $filename = '', string $altText = '', string $caption = '', string $description = ''): array
     {
+        $imageUrl = trim(html_entity_decode($imageUrl, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
@@ -161,7 +163,7 @@ trait ManagesWpCli
         $tmpDir = rtrim($installPath, '/') . '/.hexa-import-' . uniqid();
         $tmpFile = $tmpDir . '/' . $targetFilename;
         $this->execWithConnection($connection, "mkdir -p " . escapeshellarg($tmpDir));
-        $curlCmd = "curl -sL --max-time 30 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o "
+        $curlCmd = "curl -fsSL --compressed --connect-timeout 8 --max-time 25 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o "
             . escapeshellarg($tmpFile)
             . " "
             . escapeshellarg($imageUrl)
@@ -514,7 +516,35 @@ trait ManagesWpCli
         $connection = $ssh['connection'];
         $escapedId = escapeshellarg((string) $installId);
         $wptBin = $this->shellBinary($connection, $server);
-        $output = trim($this->execWithConnection($connection, "{$wptBin} --wp-cli -instance-id {$escapedId} -- user list --role=administrator --fields=user_login,display_name --format=json 2>/dev/null"));
+        $php = <<<'PHP'
+$users = get_users([
+    'orderby' => 'display_name',
+    'order' => 'ASC',
+]);
+
+$publishers = [];
+
+foreach ($users as $user) {
+    if (!user_can($user, 'edit_posts') && !user_can($user, 'publish_posts')) {
+        continue;
+    }
+
+    $publishers[] = [
+        'id' => (int) $user->ID,
+        'user_login' => (string) $user->user_login,
+        'display_name' => (string) ($user->display_name ?: $user->user_login),
+        'roles' => array_values((array) $user->roles),
+    ];
+}
+
+echo wp_json_encode($publishers);
+PHP;
+
+        $encoded = base64_encode($php);
+        $output = trim($this->execWithConnection(
+            $connection,
+            "CODE=\$(echo " . escapeshellarg($encoded) . " | base64 -d) && {$wptBin} --wp-cli -instance-id {$escapedId} -- eval \"\$CODE\" 2>/dev/null"
+        ));
 
         $authors = [];
         foreach (explode("\n", $output) as $line) {
@@ -529,7 +559,7 @@ trait ManagesWpCli
             return ['success' => false, 'authors' => [], 'message' => 'Failed to parse WP users.'];
         }
 
-        return ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' administrator users loaded.'];
+        return ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' publish-capable users loaded.'];
     }
 
     public function wpCliListCategories(WhmServer $server, int $installId): array
