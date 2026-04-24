@@ -116,6 +116,167 @@ trait ManagesWpCli
     }
 
     /**
+     * Update an existing WordPress post via wp-cli.
+     *
+     * @param WhmServer $server
+     * @param int $installId
+     * @param int $postId
+     * @param array $postData
+     * @return array{success: bool, message: string, data?: array}
+     */
+    public function wpCliUpdatePost(WhmServer $server, int $installId, int $postId, array $postData): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
+
+        $tmpFiles = [];
+        $tmpFile = null;
+        if (array_key_exists('content', $postData)) {
+            $tmpFile = '/tmp/hexa_wp_post_' . uniqid('', true) . '.html';
+            $tmpFiles[] = $tmpFile;
+            $contentBase64 = base64_encode((string) ($postData['content'] ?? ''));
+            $writeCmd = 'printf %s ' . escapeshellarg($contentBase64) . ' | base64 -d > ' . escapeshellarg($tmpFile);
+            $this->execWithConnection($connection, $writeCmd);
+        }
+
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post update " . escapeshellarg((string) $postId);
+        if (array_key_exists('title', $postData)) {
+            $cmd .= ' --post_title=' . escapeshellarg((string) $postData['title']);
+        }
+        if (array_key_exists('status', $postData)) {
+            $cmd .= ' --post_status=' . escapeshellarg((string) $postData['status']);
+        }
+        if (array_key_exists('excerpt', $postData)) {
+            $cmd .= ' --post_excerpt=' . escapeshellarg((string) ($postData['excerpt'] ?? ''));
+        }
+        if ($tmpFile) {
+            $cmd .= ' --post_content="$(cat ' . escapeshellarg($tmpFile) . ')"';
+        }
+        if (!empty($postData['categories'])) {
+            $cmd .= ' --post_category=' . escapeshellarg(implode(',', array_map('intval', $postData['categories'])));
+        }
+        if (!empty($postData['date'])) {
+            $cmd .= ' --post_date=' . escapeshellarg((string) $postData['date']);
+        }
+        if (!empty($postData['author'])) {
+            $author = (string) $postData['author'];
+            if (is_numeric($author)) {
+                $cmd .= ' --post_author=' . escapeshellarg($author);
+            } else {
+                $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . ' --field=ID 2>/dev/null';
+                $rawId = trim($this->execWithConnection($connection, $userCmd));
+                $wpUserId = '';
+                foreach (explode("
+", $rawId) as $line) {
+                    $line = trim($line);
+                    if (is_numeric($line)) {
+                        $wpUserId = $line;
+                        break;
+                    }
+                }
+                if ($wpUserId !== '') {
+                    $cmd .= ' --post_author=' . escapeshellarg($wpUserId);
+                }
+            }
+        }
+
+        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+
+        try {
+            if (str_contains($output, 'Success:')) {
+                if (array_key_exists('tags', $postData) && is_array($postData['tags'])) {
+                    $tagIds = array_values(array_filter(array_map('intval', $postData['tags'])));
+                    $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . implode(',', $tagIds) . ']);';
+                    $tagTmpFile = '/tmp/hexa_wp_tags_' . uniqid('', true) . '.php';
+                    $tmpFiles[] = $tagTmpFile;
+                    $tagWriteCmd = 'printf %s ' . escapeshellarg(base64_encode($tagPhp)) . ' | base64 -d > ' . escapeshellarg($tagTmpFile);
+                    $this->execWithConnection($connection, $tagWriteCmd);
+                    $tagCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- eval-file " . escapeshellarg($tagTmpFile) . ' 2>&1';
+                    $this->execWithConnection($connection, $tagCmd);
+                }
+
+                if (array_key_exists('featured_media', $postData) && !empty($postData['featured_media'])) {
+                    $metaCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id " . escapeshellarg((string) ((int) $postData['featured_media'])) . ' 2>&1';
+                    $this->execWithConnection($connection, $metaCmd);
+                }
+
+                $details = $this->wpCliGetPost($server, $installId, $postId);
+                if ($details['success']) {
+                    return [
+                        'success' => true,
+                        'message' => "Post updated (ID: {$postId})",
+                        'data' => $details['data'],
+                    ];
+                }
+
+                return [
+                    'success' => true,
+                    'message' => "Post updated (ID: {$postId})",
+                    'data' => [
+                        'post_id' => $postId,
+                        'post_url' => null,
+                        'post_status' => $postData['status'] ?? null,
+                        'post_date' => $postData['date'] ?? null,
+                    ],
+                ];
+            }
+        } finally {
+            foreach ($tmpFiles as $file) {
+                $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($file));
+            }
+        }
+
+        $this->generic->log('error', '[WpToolkit] wpCliUpdatePost failed', ['output' => $output, 'post_id' => $postId]);
+        return ['success' => false, 'message' => 'wp-cli post update failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+    }
+
+    /**
+     * Fetch an existing WordPress post via wp-cli.
+     *
+     * @param WhmServer $server
+     * @param int $installId
+     * @param int $postId
+     * @return array{success: bool, message: string, data?: array}
+     */
+    public function wpCliGetPost(WhmServer $server, int $installId, int $postId): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post get " . escapeshellarg((string) $postId) . ' --format=json 2>&1';
+        $output = trim($this->execWithConnection($connection, $cmd));
+        $json = json_decode($output, true);
+
+        if (!is_array($json) || empty($json['ID'])) {
+            $this->generic->log('error', '[WpToolkit] wpCliGetPost failed', ['output' => $output, 'post_id' => $postId]);
+            return ['success' => false, 'message' => 'wp-cli post get failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+        }
+
+        return [
+            'success' => true,
+            'message' => "Post fetched (ID: {$postId})",
+            'data' => [
+                'post_id' => (int) ($json['ID'] ?? $postId),
+                'post_url' => $json['url'] ?? null,
+                'post_status' => $json['post_status'] ?? null,
+                'post_title' => $json['post_title'] ?? '',
+                'post_date' => $json['post_date'] ?? null,
+            ],
+        ];
+    }
+
+    /**
      * Upload media to WordPress via wp-cli SSH (downloads URL to server, imports it).
      *
      * @param WhmServer $server
