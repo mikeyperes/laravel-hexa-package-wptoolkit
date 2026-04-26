@@ -941,4 +941,26 @@ PHP;
 
         return ['success' => $success, 'message' => $success ? "Media {$mediaId} deleted." : "Delete failed: {$clean}"];
     }
+
+    /**
+     * Run arbitrary PHP through wp-cli eval inside a WP install context.
+     * The PHP body is base64-encoded to avoid shell escaping issues.
+     *
+     * @return array{success: bool, stdout: string, message?: string}
+     */
+    public function wpCliEval(\hexa_package_whm\Models\WhmServer $server, int $installId, string $php): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'stdout' => '', 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+        $connection = $ssh['connection'];
+        $wptBin = $this->shellBinary($connection, $server);
+        $escapedId = escapeshellarg((string) $installId);
+        $b64 = base64_encode($php);
+        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && " . $wptBin . " --wp-cli -instance-id " . $escapedId . " -- eval \"$CODE\" 2>&1";
+        $out = trim($this->execWithConnection($connection, $cmd));
+        return ['success' => true, 'stdout' => $out];
+    }
+
 }
