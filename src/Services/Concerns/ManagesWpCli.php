@@ -958,7 +958,7 @@ PHP;
         $wptBin = $this->shellBinary($connection, $server);
         $escapedId = escapeshellarg((string) $installId);
         $b64 = base64_encode($php);
-        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && " . $wptBin . " --wp-cli -instance-id " . $escapedId . " -- eval \"$CODE\" 2>&1";
+        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && " . $wptBin . " --wp-cli -instance-id " . $escapedId . " -- eval \"\$CODE\" 2>&1";
         $out = trim($this->execWithConnection($connection, $cmd));
         return ['success' => true, 'stdout' => $out];
     }
