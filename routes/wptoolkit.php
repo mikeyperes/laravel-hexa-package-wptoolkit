@@ -5,7 +5,11 @@ use hexa_package_wptoolkit\Http\Controllers\WpToolkitDashboardController;
 
 Route::middleware(['web', 'auth', 'locked', 'system_lock', 'role'])->group(function () {
     Route::get('wp-toolkit', [WpToolkitDashboardController::class, 'index'])->name('wptoolkit.index');
-    Route::get('raw-wp-toolkit', [WpToolkitDashboardController::class, 'raw'])->name('wptoolkit.raw');
+    Route::hexaRawPage('raw-wp-toolkit', [WpToolkitDashboardController::class, 'raw'], 'wptoolkit.raw', [
+        'package' => 'wptoolkit',
+        'label' => 'Diagnostics',
+        'sortOrder' => 10,
+    ]);
     Route::post('wp-toolkit/settings', [WpToolkitDashboardController::class, 'saveSettings'])->name('wptoolkit.settings.save');
     Route::post('wp-toolkit/diagnostics/server', [WpToolkitDashboardController::class, 'serverDiagnostics'])->name('wptoolkit.diagnostics.server');
     Route::post('wp-toolkit/diagnostics/site-test', [WpToolkitDashboardController::class, 'siteCommandTest'])->name('wptoolkit.diagnostics.site-test');
