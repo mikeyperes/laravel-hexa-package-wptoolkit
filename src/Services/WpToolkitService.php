@@ -727,6 +727,7 @@ class WpToolkitService
         ?string $language = null,
         ?string $dbName = null,
         ?string $dbUser = null,
+        ?string $dbPassword = null,
         ?string $tablePrefix = null,
         ?string $siteTitle = null
     ): array {
@@ -756,6 +757,10 @@ class WpToolkitService
             if ($value !== null && trim((string) $value) !== '') {
                 $cmd .= ' ' . $flag . ' ' . escapeshellarg(trim((string) $value));
             }
+        }
+
+        if ($dbPassword !== null && trim((string) $dbPassword) !== '') {
+            $cmd = 'DB_PASSWORD=' . escapeshellarg(trim((string) $dbPassword)) . ' ' . $cmd;
         }
 
         $output = trim($connection->exec($cmd . ' 2>&1'));
