@@ -777,6 +777,126 @@ PHP;
      * @param array     $names Category names
      * @return array{success: bool, term_ids: array, message: string}
      */
+
+    public function wpCliResolvePreferredTaxonomy(WhmServer $server, int $installId, array $candidates = ['publication', 'category']): array
+    {
+        $candidates = array_values(array_unique(array_filter(array_map(static fn ($candidate) => trim((string) $candidate), $candidates))));
+        if (empty($candidates)) {
+            $candidates = ['publication', 'category'];
+        }
+
+        $php = '$candidates = ' . var_export($candidates, true) . ';'
+            . '$payload = ["success" => false, "message" => "No matching taxonomy found.", "taxonomy" => "", "label" => "", "hierarchical" => true];'
+            . 'foreach ($candidates as $tax) {'
+            . '  if (!taxonomy_exists($tax)) { continue; }'
+            . '  $obj = get_taxonomy($tax);'
+            . '  $payload = ['
+            . '      "success" => true,'
+            . '      "message" => "Resolved taxonomy: " . $tax,'
+            . '      "taxonomy" => $tax,'
+            . '      "label" => (string) (($obj->labels->name ?? $obj->label ?? $tax)),'
+            . '      "hierarchical" => (bool) ($obj->hierarchical ?? true),'
+            . '  ];'
+            . '  break;'
+            . '}'
+            . 'echo "HEXA_TAXONOMY:" . wp_json_encode($payload);';
+
+        $result = $this->wpCliEval($server, $installId, $php);
+        if (!($result['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => $result['message'] ?? 'Failed to evaluate taxonomy resolution.',
+            ];
+        }
+
+        foreach (explode("
+", (string) ($result['stdout'] ?? '')) as $line) {
+            $line = trim($line);
+            if (!str_contains($line, 'HEXA_TAXONOMY:')) {
+                continue;
+            }
+            $json = substr($line, strpos($line, 'HEXA_TAXONOMY:') + 14);
+            $payload = json_decode(trim($json), true);
+            if (is_array($payload)) {
+                return [
+                    'success' => (bool) ($payload['success'] ?? false),
+                    'message' => (string) ($payload['message'] ?? 'Resolved taxonomy.'),
+                    'taxonomy' => (string) ($payload['taxonomy'] ?? ''),
+                    'label' => (string) ($payload['label'] ?? ''),
+                    'hierarchical' => (bool) ($payload['hierarchical'] ?? true),
+                ];
+            }
+        }
+
+        return [
+            'success' => false,
+            'message' => 'Failed to parse taxonomy resolution output.',
+        ];
+    }
+
+    public function wpCliListTaxonomyTerms(WhmServer $server, int $installId, string $taxonomy): array
+    {
+        $taxonomy = trim($taxonomy);
+        if ($taxonomy === '') {
+            return ['success' => false, 'terms' => [], 'message' => 'Taxonomy is required.'];
+        }
+
+        $php = '$taxonomy = ' . var_export($taxonomy, true) . ';'
+            . 'if (!taxonomy_exists($taxonomy)) {'
+            . '  echo "HEXA_TERMS:" . wp_json_encode(["success" => false, "message" => "Taxonomy not found: " . $taxonomy, "terms" => []]);'
+            . '  return;'
+            . '}'
+            . '$terms = get_terms(["taxonomy" => $taxonomy, "hide_empty" => false, "orderby" => "name", "order" => "ASC"]);'
+            . 'if (is_wp_error($terms)) {'
+            . '  echo "HEXA_TERMS:" . wp_json_encode(["success" => false, "message" => $terms->get_error_message(), "terms" => []]);'
+            . '  return;'
+            . '}'
+            . '$rows = [];'
+            . 'foreach ((array) $terms as $term) {'
+            . '  $rows[] = ['
+            . '      "id" => (int) ($term->term_id ?? 0),'
+            . '      "term_id" => (int) ($term->term_id ?? 0),'
+            . '      "parent" => (int) ($term->parent ?? 0),'
+            . '      "name" => (string) ($term->name ?? ""),'
+            . '      "slug" => (string) ($term->slug ?? ""),'
+            . '      "count" => (int) ($term->count ?? 0),'
+            . '  ];'
+            . '}'
+            . 'echo "HEXA_TERMS:" . wp_json_encode(["success" => true, "message" => count($rows) . " taxonomy terms loaded.", "terms" => $rows]);';
+
+        $result = $this->wpCliEval($server, $installId, $php);
+        if (!($result['success'] ?? false)) {
+            return [
+                'success' => false,
+                'terms' => [],
+                'message' => $result['message'] ?? 'Failed to evaluate taxonomy terms.',
+            ];
+        }
+
+        foreach (explode("
+", (string) ($result['stdout'] ?? '')) as $line) {
+            $line = trim($line);
+            if (!str_contains($line, 'HEXA_TERMS:')) {
+                continue;
+            }
+            $json = substr($line, strpos($line, 'HEXA_TERMS:') + 11);
+            $payload = json_decode(trim($json), true);
+            if (is_array($payload)) {
+                return [
+                    'success' => (bool) ($payload['success'] ?? false),
+                    'terms' => is_array($payload['terms'] ?? null) ? $payload['terms'] : [],
+                    'message' => (string) ($payload['message'] ?? 'Taxonomy terms loaded.'),
+                ];
+            }
+        }
+
+        return [
+            'success' => false,
+            'terms' => [],
+            'message' => 'Failed to parse taxonomy terms output.',
+        ];
+    }
+
     public function wpCliBatchCategories(WhmServer $server, int $installId, array $names): array
     {
         return $this->wpCliBatchTerms($server, $installId, $names, 'category');
