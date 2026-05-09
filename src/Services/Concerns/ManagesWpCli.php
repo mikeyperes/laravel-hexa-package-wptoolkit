@@ -668,11 +668,18 @@ trait ManagesWpCli
         return ['success' => false, 'message' => 'Write test failed: ' . \Illuminate\Support\Str::limit($output, 200)];
     }
 
-    public function wpCliListAdminUsers(WhmServer $server, int $installId): array
+    public function wpCliListAdminUsers(WhmServer $server, int $installId, bool $forceRefresh = false): array
     {
         $cacheKey = 'wptoolkit:publish-authors:' . $server->id . ':' . $installId;
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
         $cached = Cache::get($cacheKey);
-        if (is_array($cached)) {
+        if (!$forceRefresh && is_array($cached)) {
+            $cached['cache_hit'] = true;
+            $cached['cached_at'] = $cached['cached_at'] ?? null;
+            $cached['expires_at'] = $cached['expires_at'] ?? null;
             return $cached;
         }
 
@@ -727,8 +734,17 @@ PHP;
             return ['success' => false, 'authors' => [], 'message' => 'Failed to parse WP users.'];
         }
 
-        $result = ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' publish-capable users loaded.'];
-        Cache::put($cacheKey, $result, now()->addMinutes(10));
+        $now = now();
+        $expiresAt = $now->copy()->addDays(30);
+        $result = [
+            'success' => true,
+            'authors' => $authors,
+            'message' => count($authors) . ' publish-capable users loaded.',
+            'cache_hit' => false,
+            'cached_at' => $now->toIso8601String(),
+            'expires_at' => $expiresAt->toIso8601String(),
+        ];
+        Cache::put($cacheKey, $result, $expiresAt);
 
         return $result;
     }
