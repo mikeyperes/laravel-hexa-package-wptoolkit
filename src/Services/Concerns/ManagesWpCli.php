@@ -263,6 +263,9 @@ trait ManagesWpCli
         $probe = $this->runCommandWithExitCode($connection, $cmd);
         $output = trim((string) ($probe['clean_output'] ?? ''));
         $json = json_decode($output, true);
+        if (!is_array($json) || empty($json['ID'])) {
+            $json = $this->extractJsonObjectFromOutput($output);
+        }
 
         if (!is_array($json) || empty($json['ID'])) {
             $this->generic->log('error', '[WpToolkit] wpCliGetPost failed', ['output' => $output, 'post_id' => $postId]);
@@ -522,7 +525,11 @@ trait ManagesWpCli
             }
             $lower = strtolower($line);
             if (
-                str_contains($lower, 'using null as an array offset is deprecated')
+                str_contains($lower, 'deprecated:')
+                || str_contains($lower, 'warning:')
+                || str_contains($lower, 'notice:')
+                || str_starts_with($lower, 'php ')
+                || str_contains($lower, 'using null as an array offset is deprecated')
                 || str_contains($lower, 'php-cli-tools/lib/cli/colors.php')
                 || str_contains($lower, 'colors.php on line 95')
             ) {
@@ -537,6 +544,23 @@ trait ManagesWpCli
             'clean_output' => implode("\n", $lines),
             'lines' => $lines,
         ];
+    }
+
+    protected function extractJsonObjectFromOutput(string $output): ?array
+    {
+        $trimmed = trim($output);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (preg_match('/\{.*\}/s', $trimmed, $matches)) {
+            $decoded = json_decode($matches[0], true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
     }
 
     /**
