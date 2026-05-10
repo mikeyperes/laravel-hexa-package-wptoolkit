@@ -193,7 +193,8 @@ trait ManagesWpCli
         $output = trim((string) ($command['clean_output'] ?? ''));
 
         try {
-            if (str_contains($output, 'Success:')) {
+            $updateSucceeded = str_contains($output, 'Success:') || ((int) ($command['exit_code'] ?? 1) === 0 && !str_contains(strtolower($output), 'error:'));
+            if ($updateSucceeded) {
                 if (array_key_exists('tags', $postData) && is_array($postData['tags'])) {
                     $tagIds = array_values(array_filter(array_map('intval', $postData['tags'])));
                     $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . implode(',', $tagIds) . ']);';
