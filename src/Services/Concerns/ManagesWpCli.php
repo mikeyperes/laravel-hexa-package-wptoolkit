@@ -59,7 +59,8 @@ trait ManagesWpCli
                 $cmd .= " --post_author=" . escapeshellarg($author);
             } else {
                 $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . " --field=ID 2>/dev/null";
-                $rawId = trim($this->execWithConnection($connection, $userCmd));
+                $userLookup = $this->runCommandWithExitCode($connection, $userCmd . ' 2>&1');
+                $rawId = trim((string) ($userLookup['clean_output'] ?? ''));
                 $wpUserId = '';
                 foreach (explode("\n", $rawId) as $ul) { $ul = trim($ul); if (is_numeric($ul)) { $wpUserId = $ul; break; } }
                 if ($wpUserId) {
@@ -73,7 +74,8 @@ trait ManagesWpCli
 
         $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status, 'author' => $author]);
 
-        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        $command = $this->runCommandWithExitCode($connection, $cmd . ' 2>&1');
+        $output = trim((string) ($command['clean_output'] ?? ''));
 
         // Cleanup temp file
         $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpFile));
@@ -100,7 +102,8 @@ trait ManagesWpCli
 
             // Get permalink
             $urlCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post get {$postId} --field=url 2>&1";
-            $postUrl = trim($this->execWithConnection($connection, $urlCmd));
+            $urlLookup = $this->runCommandWithExitCode($connection, $urlCmd);
+            $postUrl = trim((string) ($urlLookup['clean_output'] ?? ''));
             if (!str_starts_with($postUrl, 'http')) $postUrl = null;
 
             $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId, 'url' => $postUrl]);
@@ -170,10 +173,10 @@ trait ManagesWpCli
                 $cmd .= ' --post_author=' . escapeshellarg($author);
             } else {
                 $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . ' --field=ID 2>/dev/null';
-                $rawId = trim($this->execWithConnection($connection, $userCmd));
+                $userLookup = $this->runCommandWithExitCode($connection, $userCmd . ' 2>&1');
+                $rawId = trim((string) ($userLookup['clean_output'] ?? ''));
                 $wpUserId = '';
-                foreach (explode("
-", $rawId) as $line) {
+                foreach (explode("\n", $rawId) as $line) {
                     $line = trim($line);
                     if (is_numeric($line)) {
                         $wpUserId = $line;
@@ -186,7 +189,8 @@ trait ManagesWpCli
             }
         }
 
-        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        $command = $this->runCommandWithExitCode($connection, $cmd . ' 2>&1');
+        $output = trim((string) ($command['clean_output'] ?? ''));
 
         try {
             if (str_contains($output, 'Success:')) {
@@ -198,12 +202,12 @@ trait ManagesWpCli
                     $tagWriteCmd = 'printf %s ' . escapeshellarg(base64_encode($tagPhp)) . ' | base64 -d > ' . escapeshellarg($tagTmpFile);
                     $this->execWithConnection($connection, $tagWriteCmd);
                     $tagCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- eval-file " . escapeshellarg($tagTmpFile) . ' 2>&1';
-                    $this->execWithConnection($connection, $tagCmd);
+                    $this->runCommandWithExitCode($connection, $tagCmd);
                 }
 
                 if (array_key_exists('featured_media', $postData) && !empty($postData['featured_media'])) {
                     $metaCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id " . escapeshellarg((string) ((int) $postData['featured_media'])) . ' 2>&1';
-                    $this->execWithConnection($connection, $metaCmd);
+                    $this->runCommandWithExitCode($connection, $metaCmd);
                 }
 
                 $details = $this->wpCliGetPost($server, $installId, $postId);
@@ -255,7 +259,8 @@ trait ManagesWpCli
         $escapedId = escapeshellarg((string) $installId);
         $wptBin = $this->shellBinary($connection, $server);
         $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post get " . escapeshellarg((string) $postId) . ' --format=json 2>&1';
-        $output = trim($this->execWithConnection($connection, $cmd));
+        $probe = $this->runCommandWithExitCode($connection, $cmd);
+        $output = trim((string) ($probe['clean_output'] ?? ''));
         $json = json_decode($output, true);
 
         if (!is_array($json) || empty($json['ID'])) {
@@ -514,10 +519,12 @@ trait ManagesWpCli
             if ($line === '') {
                 continue;
             }
-            if (str_starts_with($line, 'Deprecated:') && str_contains($line, 'Colors.php on line 95')) {
-                continue;
-            }
-            if (str_starts_with($line, 'PHP Deprecated:') && str_contains($line, 'Colors.php on line 95')) {
+            $lower = strtolower($line);
+            if (
+                str_contains($lower, 'using null as an array offset is deprecated')
+                || str_contains($lower, 'php-cli-tools/lib/cli/colors.php')
+                || str_contains($lower, 'colors.php on line 95')
+            ) {
                 continue;
             }
             $lines[] = $line;
