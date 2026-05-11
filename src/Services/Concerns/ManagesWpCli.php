@@ -59,7 +59,8 @@ trait ManagesWpCli
                 $cmd .= " --post_author=" . escapeshellarg($author);
             } else {
                 $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . " --field=ID 2>/dev/null";
-                $rawId = trim($this->execWithConnection($connection, $userCmd));
+                $userLookup = $this->runCommandWithExitCode($connection, $userCmd . ' 2>&1');
+                $rawId = trim((string) ($userLookup['clean_output'] ?? ''));
                 $wpUserId = '';
                 foreach (explode("\n", $rawId) as $ul) { $ul = trim($ul); if (is_numeric($ul)) { $wpUserId = $ul; break; } }
                 if ($wpUserId) {
@@ -73,7 +74,8 @@ trait ManagesWpCli
 
         $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status, 'author' => $author]);
 
-        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        $command = $this->runCommandWithExitCode($connection, $cmd . ' 2>&1');
+        $output = trim((string) ($command['clean_output'] ?? ''));
 
         // Cleanup temp file
         $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpFile));
@@ -100,7 +102,8 @@ trait ManagesWpCli
 
             // Get permalink
             $urlCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post get {$postId} --field=url 2>&1";
-            $postUrl = trim($this->execWithConnection($connection, $urlCmd));
+            $urlLookup = $this->runCommandWithExitCode($connection, $urlCmd);
+            $postUrl = trim((string) ($urlLookup['clean_output'] ?? ''));
             if (!str_starts_with($postUrl, 'http')) $postUrl = null;
 
             $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId, 'url' => $postUrl]);
@@ -170,10 +173,10 @@ trait ManagesWpCli
                 $cmd .= ' --post_author=' . escapeshellarg($author);
             } else {
                 $userCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user get " . escapeshellarg($author) . ' --field=ID 2>/dev/null';
-                $rawId = trim($this->execWithConnection($connection, $userCmd));
+                $userLookup = $this->runCommandWithExitCode($connection, $userCmd . ' 2>&1');
+                $rawId = trim((string) ($userLookup['clean_output'] ?? ''));
                 $wpUserId = '';
-                foreach (explode("
-", $rawId) as $line) {
+                foreach (explode("\n", $rawId) as $line) {
                     $line = trim($line);
                     if (is_numeric($line)) {
                         $wpUserId = $line;
@@ -186,10 +189,12 @@ trait ManagesWpCli
             }
         }
 
-        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        $command = $this->runCommandWithExitCode($connection, $cmd . ' 2>&1');
+        $output = trim((string) ($command['clean_output'] ?? ''));
 
         try {
-            if (str_contains($output, 'Success:')) {
+            $updateSucceeded = str_contains($output, 'Success:') || ((int) ($command['exit_code'] ?? 1) === 0 && !str_contains(strtolower($output), 'error:'));
+            if ($updateSucceeded) {
                 if (array_key_exists('tags', $postData) && is_array($postData['tags'])) {
                     $tagIds = array_values(array_filter(array_map('intval', $postData['tags'])));
                     $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . implode(',', $tagIds) . ']);';
@@ -198,12 +203,12 @@ trait ManagesWpCli
                     $tagWriteCmd = 'printf %s ' . escapeshellarg(base64_encode($tagPhp)) . ' | base64 -d > ' . escapeshellarg($tagTmpFile);
                     $this->execWithConnection($connection, $tagWriteCmd);
                     $tagCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- eval-file " . escapeshellarg($tagTmpFile) . ' 2>&1';
-                    $this->execWithConnection($connection, $tagCmd);
+                    $this->runCommandWithExitCode($connection, $tagCmd);
                 }
 
                 if (array_key_exists('featured_media', $postData) && !empty($postData['featured_media'])) {
                     $metaCmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post meta update {$postId} _thumbnail_id " . escapeshellarg((string) ((int) $postData['featured_media'])) . ' 2>&1';
-                    $this->execWithConnection($connection, $metaCmd);
+                    $this->runCommandWithExitCode($connection, $metaCmd);
                 }
 
                 $details = $this->wpCliGetPost($server, $installId, $postId);
@@ -255,8 +260,12 @@ trait ManagesWpCli
         $escapedId = escapeshellarg((string) $installId);
         $wptBin = $this->shellBinary($connection, $server);
         $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- post get " . escapeshellarg((string) $postId) . ' --format=json 2>&1';
-        $output = trim($this->execWithConnection($connection, $cmd));
+        $probe = $this->runCommandWithExitCode($connection, $cmd);
+        $output = trim((string) ($probe['clean_output'] ?? ''));
         $json = json_decode($output, true);
+        if (!is_array($json) || empty($json['ID'])) {
+            $json = $this->extractJsonObjectFromOutput($output);
+        }
 
         if (!is_array($json) || empty($json['ID'])) {
             $this->generic->log('error', '[WpToolkit] wpCliGetPost failed', ['output' => $output, 'post_id' => $postId]);
@@ -514,10 +523,16 @@ trait ManagesWpCli
             if ($line === '') {
                 continue;
             }
-            if (str_starts_with($line, 'Deprecated:') && str_contains($line, 'Colors.php on line 95')) {
-                continue;
-            }
-            if (str_starts_with($line, 'PHP Deprecated:') && str_contains($line, 'Colors.php on line 95')) {
+            $lower = strtolower($line);
+            if (
+                str_contains($lower, 'deprecated:')
+                || str_contains($lower, 'warning:')
+                || str_contains($lower, 'notice:')
+                || str_starts_with($lower, 'php ')
+                || str_contains($lower, 'using null as an array offset is deprecated')
+                || str_contains($lower, 'php-cli-tools/lib/cli/colors.php')
+                || str_contains($lower, 'colors.php on line 95')
+            ) {
                 continue;
             }
             $lines[] = $line;
@@ -529,6 +544,23 @@ trait ManagesWpCli
             'clean_output' => implode("\n", $lines),
             'lines' => $lines,
         ];
+    }
+
+    protected function extractJsonObjectFromOutput(string $output): ?array
+    {
+        $trimmed = trim($output);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (preg_match('/\{.*\}/s', $trimmed, $matches)) {
+            $decoded = json_decode($matches[0], true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -668,11 +700,18 @@ trait ManagesWpCli
         return ['success' => false, 'message' => 'Write test failed: ' . \Illuminate\Support\Str::limit($output, 200)];
     }
 
-    public function wpCliListAdminUsers(WhmServer $server, int $installId): array
+    public function wpCliListAdminUsers(WhmServer $server, int $installId, bool $forceRefresh = false): array
     {
         $cacheKey = 'wptoolkit:publish-authors:' . $server->id . ':' . $installId;
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
         $cached = Cache::get($cacheKey);
-        if (is_array($cached)) {
+        if (!$forceRefresh && is_array($cached)) {
+            $cached['cache_hit'] = true;
+            $cached['cached_at'] = $cached['cached_at'] ?? null;
+            $cached['expires_at'] = $cached['expires_at'] ?? null;
             return $cached;
         }
 
@@ -727,8 +766,17 @@ PHP;
             return ['success' => false, 'authors' => [], 'message' => 'Failed to parse WP users.'];
         }
 
-        $result = ['success' => true, 'authors' => $authors, 'message' => count($authors) . ' publish-capable users loaded.'];
-        Cache::put($cacheKey, $result, now()->addMinutes(10));
+        $now = now();
+        $expiresAt = $now->copy()->addDays(30);
+        $result = [
+            'success' => true,
+            'authors' => $authors,
+            'message' => count($authors) . ' publish-capable users loaded.',
+            'cache_hit' => false,
+            'cached_at' => $now->toIso8601String(),
+            'expires_at' => $expiresAt->toIso8601String(),
+        ];
+        Cache::put($cacheKey, $result, $expiresAt);
 
         return $result;
     }
