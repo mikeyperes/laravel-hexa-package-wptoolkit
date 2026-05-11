@@ -945,6 +945,76 @@ PHP;
         ];
     }
 
+    public function wpCliSetPostTerms(WhmServer $server, int $installId, int $postId, string $taxonomy, array $termIds): array
+    {
+        $taxonomy = trim($taxonomy);
+        $termIds = array_values(array_unique(array_filter(array_map('intval', $termIds))));
+
+        if ($taxonomy === '') {
+            return ['success' => false, 'message' => 'Taxonomy is required.', 'term_ids' => [], 'term_taxonomy_ids' => []];
+        }
+
+        if ($postId <= 0) {
+            return ['success' => false, 'message' => 'Post ID is required.', 'term_ids' => [], 'term_taxonomy_ids' => []];
+        }
+
+        if ($termIds === []) {
+            return ['success' => true, 'message' => 'No terms to assign.', 'term_ids' => [], 'term_taxonomy_ids' => []];
+        }
+
+        $php = '$postId = ' . (int) $postId . ';'
+            . '$taxonomy = ' . var_export($taxonomy, true) . ';'
+            . '$termIds = ' . var_export($termIds, true) . ';'
+            . 'if (!taxonomy_exists($taxonomy)) {'
+            . '  echo "HEXA_ASSIGN_TERMS:" . wp_json_encode(["success" => false, "message" => "Taxonomy not found: " . $taxonomy, "term_ids" => [], "term_taxonomy_ids" => []]);'
+            . '  return;'
+            . '}'
+            . '$assigned = wp_set_object_terms($postId, $termIds, $taxonomy, false);'
+            . 'if (is_wp_error($assigned)) {'
+            . '  echo "HEXA_ASSIGN_TERMS:" . wp_json_encode(["success" => false, "message" => $assigned->get_error_message(), "term_ids" => [], "term_taxonomy_ids" => []]);'
+            . '  return;'
+            . '}'
+            . '$confirmed = wp_get_object_terms($postId, $taxonomy, ["fields" => "ids"]);'
+            . 'if (is_wp_error($confirmed)) { $confirmed = []; }'
+            . '$termTaxonomyIds = array_values(array_map("intval", is_array($assigned) ? $assigned : []));'
+            . '$confirmedIds = array_values(array_map("intval", is_array($confirmed) ? $confirmed : []));'
+            . 'echo "HEXA_ASSIGN_TERMS:" . wp_json_encode(["success" => true, "message" => "Assigned terms to " . $taxonomy . ".", "term_ids" => $confirmedIds, "term_taxonomy_ids" => $termTaxonomyIds]);';
+
+        $result = $this->wpCliEval($server, $installId, $php);
+        if (!($result['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => $result['message'] ?? 'Failed to assign taxonomy terms.',
+                'term_ids' => [],
+                'term_taxonomy_ids' => [],
+            ];
+        }
+
+        foreach (explode("\n", (string) ($result['stdout'] ?? '')) as $line) {
+            $line = trim($line);
+            if (!str_contains($line, 'HEXA_ASSIGN_TERMS:')) {
+                continue;
+            }
+            $json = substr($line, strpos($line, 'HEXA_ASSIGN_TERMS:') + 18);
+            $payload = json_decode(trim($json), true);
+            if (is_array($payload)) {
+                return [
+                    'success' => (bool) ($payload['success'] ?? false),
+                    'message' => (string) ($payload['message'] ?? 'Assigned taxonomy terms.'),
+                    'term_ids' => array_values(array_map('intval', (array) ($payload['term_ids'] ?? []))),
+                    'term_taxonomy_ids' => array_values(array_map('intval', (array) ($payload['term_taxonomy_ids'] ?? []))),
+                ];
+            }
+        }
+
+        return [
+            'success' => false,
+            'message' => 'Failed to parse term assignment output.',
+            'term_ids' => [],
+            'term_taxonomy_ids' => [],
+        ];
+    }
+
     public function wpCliBatchCategories(WhmServer $server, int $installId, array $names): array
     {
         return $this->wpCliBatchTerms($server, $installId, $names, 'category');
