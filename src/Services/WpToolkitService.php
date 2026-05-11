@@ -55,6 +55,11 @@ class WpToolkitService
         return max(10, (int) config('wptoolkit.ssh.timeout', 120));
     }
 
+    public function longRunningTimeoutSeconds(int $floor = 1800): int
+    {
+        return max($floor, $this->commandTimeoutSeconds());
+    }
+
     protected function connectionCacheKey(WhmServer $server): string
     {
         return $this->connectionMode($server) . '_' . $server->id . '_' . $server->hostname;
@@ -702,11 +707,17 @@ class WpToolkitService
             $cmd .= ' -target-db-user-login ' . escapeshellarg(trim($targetDbUserLogin));
         }
 
-        $output = trim($connection->exec($cmd . ' 2>&1'));
+        $originalTimeout = $this->commandTimeoutSeconds();
+        $connection->setTimeout($this->longRunningTimeoutSeconds());
+        try {
+            $output = trim($connection->exec($cmd . ' 2>&1'));
+        } finally {
+            $connection->setTimeout($originalTimeout);
+        }
         $success = $this->toolkitOutputLooksSuccessful($output, [
-            'instance-id',
-            'target-domain-name',
-            'source-instance-id',
+            'success',
+            'completed',
+            'cloning has finished successfully',
         ]);
 
         return [
@@ -825,7 +836,7 @@ class WpToolkitService
         ];
     }
 
-    public function wpCliRaw(WhmServer $server, int $installId, string $wpCliCommand): array
+    public function wpCliRaw(WhmServer $server, int $installId, string $wpCliCommand, ?int $timeoutSeconds = null): array
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -836,7 +847,16 @@ class WpToolkitService
         $wptBin = $this->shellBinary($connection, $server);
         $escapedId = escapeshellarg((string) $installId);
         $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- {$wpCliCommand} 2>&1";
-        $stdout = trim($connection->exec($cmd));
+        $originalTimeout = $this->commandTimeoutSeconds();
+        $effectiveTimeout = $timeoutSeconds && $timeoutSeconds > 0
+            ? max($originalTimeout, $timeoutSeconds)
+            : $originalTimeout;
+        $connection->setTimeout($effectiveTimeout);
+        try {
+            $stdout = trim($connection->exec($cmd));
+        } finally {
+            $connection->setTimeout($originalTimeout);
+        }
 
         return [
             'success' => true,
