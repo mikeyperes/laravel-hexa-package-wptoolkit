@@ -49,10 +49,13 @@ trait ManagesCredentials
         $escapedPath = escapeshellarg($wpPath);
         $escapedUser = escapeshellarg($username);
 
-        $userFields = 'ID,user_login,user_email,display_name,roles,user_registered';
+        $adminUserEval = $this->buildAdministratorUserEval();
+        $encodedEval = base64_encode($adminUserEval);
+        $decodeEval = "CODE=\$(echo " . escapeshellarg($encodedEval) . " | base64 -d)";
 
-        // Method 1: wp-toolkit --wp-cli (uses install ID)
-        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user list --fields={$userFields} --format=json 2>&1";
+        // Method 1: wp-toolkit --wp-cli (uses install ID) with cache_results=false to bypass
+        // poisoned persistent object-cache entries for WP_User_Query.
+        $cmd = "{$decodeEval} && {$wptBin} --wp-cli -instance-id {$escapedId} -- eval \"\$CODE\" 2>&1";
 
         $this->generic->log('info', '[WpToolkit] Trying wp-toolkit --wp-cli', ['command' => $cmd]);
         $output = trim($connection->exec($cmd));
@@ -61,7 +64,7 @@ trait ManagesCredentials
 
         // Method 2: Direct wp-cli as cPanel user (fallback)
         if ($adminUsers === null) {
-            $cmd = "sudo -u {$escapedUser} wp user list --fields={$userFields} --format=json --path={$escapedPath} 2>&1";
+            $cmd = "{$decodeEval} && sudo -u {$escapedUser} wp eval \"\$CODE\" --path={$escapedPath} 2>&1";
 
             $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
             $fallbackOutput = trim($connection->exec($cmd));
@@ -208,6 +211,46 @@ trait ManagesCredentials
         }
 
         return $users;
+    }
+
+    protected function buildAdministratorUserEval(): string
+    {
+        return <<<'PHP'
+if (function_exists('wp_suspend_cache_addition')) {
+    wp_suspend_cache_addition(true);
+}
+
+$users = get_users([
+    'role' => 'administrator',
+    'orderby' => 'ID',
+    'order' => 'ASC',
+    'count_total' => false,
+    'cache_results' => false,
+    'fields' => 'all_with_meta',
+]);
+
+$payload = [];
+foreach ($users as $user) {
+    if (!$user instanceof WP_User) {
+        continue;
+    }
+
+    $payload[] = [
+        'ID' => (int) $user->ID,
+        'user_login' => (string) $user->user_login,
+        'user_email' => (string) $user->user_email,
+        'display_name' => (string) $user->display_name,
+        'roles' => array_values((array) $user->roles),
+        'user_registered' => (string) $user->user_registered,
+    ];
+}
+
+if (function_exists('wp_suspend_cache_addition')) {
+    wp_suspend_cache_addition(false);
+}
+
+echo wp_json_encode($payload);
+PHP;
     }
 
     /**

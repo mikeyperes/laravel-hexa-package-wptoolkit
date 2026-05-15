@@ -166,9 +166,14 @@ class WpToolkitService
 
     public function connectionLabel(WhmServer $server): string
     {
-        return $this->connectionMode($server) === 'local'
-            ? 'WP Toolkit (local)'
-            : 'WP Toolkit (SSH)';
+        return $this->connectionMode($server) === "local"
+            ? "WP Toolkit (local)"
+            : "WP Toolkit (SSH)";
+    }
+
+    public function isSameHostServer(WhmServer $server): bool
+    {
+        return $this->serverMatchesLocalHost($server);
     }
 
     /**
