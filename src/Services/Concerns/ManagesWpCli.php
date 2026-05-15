@@ -342,9 +342,8 @@ trait ManagesWpCli
             . escapeshellarg($tmpFile)
             . " 2>/dev/null";
         $this->execWithConnection($connection, $curlCmd);
-        $fileSize = trim($this->execWithConnection($connection, "stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0"));
         if (!$fileSize || $fileSize === '0') {
-            $this->execWithConnection($connection, "rm -rf " . escapeshellarg($tmpDir));
+            $this->execWithConnection($connection, $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)));
             $this->generic->log('error', '[WpToolkit] Image download failed', [
                 'url' => $imageUrl,
                 'filename' => $targetFilename,
@@ -368,7 +367,7 @@ trait ManagesWpCli
             . $descriptionArg
             . " --porcelain 2>&1";
         $import = $this->runCommandWithExitCode($connection, $cmd);
-        $this->execWithConnection($connection, "rm -rf " . escapeshellarg($tmpDir));
+        $this->execWithConnection($connection, $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)));
 
         $output = '';
         foreach ($import['lines'] as $line) {
@@ -447,6 +446,164 @@ trait ManagesWpCli
             'tmp_file' => $tmpFile,
         ]);
         return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'unknown error', 300)];
+    }
+
+    public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, string $sourcePath, string $filename = "", string $altText = "", string $caption = "", string $description = ""): array
+    {
+        $sourcePath = trim($sourcePath);
+        if ($sourcePath === "") {
+            return ["success" => false, "message" => "Local media source path is missing."];
+        }
+
+        $ssh = $this->getConnection($server);
+        if (!$ssh["success"]) {
+            return ["success" => false, "message" => $ssh["error"] ?? "SSH connection failed"];
+        }
+
+        $connection = $ssh["connection"];
+        $escapedId = escapeshellarg((string) $installId);
+        $wptBin = $this->shellBinary($connection, $server);
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        if (!$installPath) {
+            return ["success" => false, "message" => "Unable to resolve WordPress install path for local media import"];
+        }
+
+        $ext = pathinfo($sourcePath, PATHINFO_EXTENSION) ?: "jpg";
+        $ext = preg_replace("/[^a-zA-Z0-9].*/", "", $ext);
+        if (!in_array(strtolower($ext), ["jpg", "jpeg", "png", "gif", "webp", "svg", "avif"])) $ext = "jpg";
+        $targetFilename = $filename ? basename($filename) : basename($sourcePath);
+        if ($targetFilename === "") $targetFilename = "hexa-upload-" . uniqid() . "." . $ext;
+        if (!preg_match("/\\.\\w{2,5}$/", $targetFilename)) $targetFilename .= "." . $ext;
+        $tmpDir = rtrim($installPath, "/") . "/.hexa-import-" . uniqid();
+        $tmpFile = $tmpDir . "/" . $targetFilename;
+
+        $stageCommand = "mkdir -p " . escapeshellarg($tmpDir)
+            . " && test -r " . escapeshellarg($sourcePath)
+            . " && cp -f " . escapeshellarg($sourcePath) . " " . escapeshellarg($tmpFile)
+            . " && chmod 644 " . escapeshellarg($tmpFile)
+            . " 2>&1";
+        $copy = $this->runCommandWithExitCode(
+            $connection,
+            $this->localFilesystemCommand($connection, $stageCommand)
+        );
+        $fileSize = trim($this->execWithConnection(
+            $connection,
+            $this->localFilesystemCommand($connection, "stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0")
+        ));
+
+        if (($copy["exit_code"] ?? 1) !== 0 || !$fileSize || $fileSize === "0") {
+            $this->execWithConnection($connection, $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)));
+            $cleanOutput = $copy["clean_output"] ?: $copy["raw_output"];
+            $this->generic->log("error", "[WpToolkit] Local media staging failed", [
+                "source_path" => $sourcePath,
+                "install_path" => $installPath,
+                "tmp_file" => $tmpFile,
+                "exit_code" => $copy["exit_code"] ?? null,
+                "output" => $cleanOutput,
+            ]);
+            return ["success" => false, "message" => "Could not stage the media file for the local WordPress import: " . \Illuminate\Support\Str::limit($cleanOutput ?: "copy failed", 300)];
+        }
+
+        $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : "";
+        $fileNameArg = $filename ? " --file_name=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : "";
+        $altArg = $altText ? " --alt=" . escapeshellarg($altText) : "";
+        $captionArg = $caption ? " --caption=" . escapeshellarg($caption) : "";
+        $descriptionArg = $description ? " --desc=" . escapeshellarg($description) : "";
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- media import "
+            . escapeshellarg($tmpFile)
+            . $fileNameArg
+            . $titleArg
+            . $captionArg
+            . $altArg
+            . $descriptionArg
+            . " --porcelain 2>&1";
+        $import = $this->runCommandWithExitCode($connection, $cmd);
+        $this->execWithConnection($connection, $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)));
+
+        $output = "";
+        foreach ($import["lines"] as $line) {
+            if (is_numeric($line)) {
+                $output = $line;
+                break;
+            }
+        }
+
+        if (is_numeric($output)) {
+            $mediaId = (int) $output;
+            $metaPhp = '$id=' . $mediaId . ';'
+                . ($altText ? 'update_post_meta($id,"_wp_attachment_image_alt",' . json_encode($altText) . ');' : '')
+                . 'update_post_meta($id,"_hexa_generated","true");'
+                . 'update_post_meta($id,"_hexa_upload_time","' . date('Y-m-d H:i:s') . '");'
+                . 'wp_update_post(["ID"=>$id'
+                . ($caption ? ',"post_excerpt"=>' . json_encode($caption) : '')
+                . ($description ? ',"post_content"=>' . json_encode($description) : '')
+                . ']);'
+                . '$src=wp_get_attachment_url($id);'
+                . '$file=get_attached_file($id);'
+                . '$fsize=$file&&file_exists($file)?filesize($file):0;'
+                . '$relpath=str_replace(ABSPATH,"",$file);'
+                . '$sizes_list=["thumbnail","medium","medium_large","large","full"];'
+                . '$all=["full"=>$src];'
+                . 'foreach($sizes_list as $s){$img=wp_get_attachment_image_src($id,$s);if($img) $all[$s]=$img[0];}'
+                . 'echo "HEXA_MEDIA:".json_encode(["sizes"=>$all,"file_path"=>$relpath,"file_size"=>$fsize,"media_id"=>$id]);';
+            $phpCode = base64_encode($metaPhp);
+            $metaCmd = "CODE=\$(echo '{$phpCode}' | base64 -d) && {$wptBin} --wp-cli -instance-id {$installId} -- eval \"\$CODE\" 2>&1";
+            $metaOutput = trim($this->execWithConnection($connection, $metaCmd));
+
+            $sizes = [];
+            $mediaUrl = "";
+            $filePath = "";
+            $uploadedFileSize = 0;
+            foreach (explode("\n", $metaOutput) as $sLine) {
+                if (str_contains($sLine, "HEXA_MEDIA:")) {
+                    $json = substr($sLine, strpos($sLine, "HEXA_MEDIA:") + 11);
+                    $parsed = json_decode(trim($json), true) ?: [];
+                    $sizes = $parsed["sizes"] ?? [];
+                    $mediaUrl = $sizes["full"] ?? $sizes["large"] ?? "";
+                    $filePath = $parsed["file_path"] ?? "";
+                    $uploadedFileSize = $parsed["file_size"] ?? 0;
+                    break;
+                }
+            }
+
+            $this->generic->log("info", "[WpToolkit] Local media imported", ["media_id" => $mediaId, "url" => $mediaUrl, "sizes" => count($sizes)]);
+            return [
+                "success" => true,
+                "message" => "Media uploaded (ID: {$mediaId})",
+                "data"    => [
+                    "media_id" => $mediaId,
+                    "media_url" => $mediaUrl,
+                    "sizes" => $sizes,
+                    "source_url" => $sourcePath,
+                    "filename" => $filename,
+                    "file_path" => $filePath,
+                    "file_size" => $uploadedFileSize,
+                    "alt_text" => $altText,
+                    "caption" => $caption,
+                    "description" => $description,
+                ],
+            ];
+        }
+
+        $cleanOutput = $import["clean_output"] ?: $import["raw_output"];
+        $this->generic->log("error", "[WpToolkit] wpCliImportLocalMediaFile failed", [
+            "exit_code" => $import["exit_code"],
+            "output" => $cleanOutput,
+            "raw_output" => $import["raw_output"],
+            "install_path" => $installPath,
+            "tmp_file" => $tmpFile,
+            "source_path" => $sourcePath,
+        ]);
+        return ["success" => false, "message" => "wp-cli media import failed: " . \Illuminate\Support\Str::limit($cleanOutput ?: "unknown error", 300)];
+    }
+
+    protected function localFilesystemCommand(SSH2|LocalShellConnection $connection, string $command): string
+    {
+        if ($connection instanceof LocalShellConnection && $this->currentRuntimeUser() !== "root") {
+            return "sudo -n /usr/local/bin/hexa-wp-local-fs " . escapeshellarg(base64_encode($command));
+        }
+
+        return $command;
     }
 
     protected function resolveInstallPath(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): ?string
