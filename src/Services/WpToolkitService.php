@@ -38,7 +38,11 @@ class WpToolkitService
     protected array $sshCache = [];
     protected array $installInfoCache = [];
     protected ?array $localProbe = null;
+    protected ?array $localWpCliProbe = null;
     protected array $remoteProbeCache = [];
+    protected ?array $localHostAliasesCache = null;
+    protected array $hostAliasCache = [];
+    protected array $wpAuthorIdCache = [];
 
     /**
      * @param GenericService $generic
@@ -53,11 +57,6 @@ class WpToolkitService
     public function commandTimeoutSeconds(): int
     {
         return max(10, (int) config('wptoolkit.ssh.timeout', 120));
-    }
-
-    public function longRunningTimeoutSeconds(int $floor = 1800): int
-    {
-        return max($floor, $this->commandTimeoutSeconds());
     }
 
     protected function connectionCacheKey(WhmServer $server): string
@@ -113,6 +112,10 @@ class WpToolkitService
         // Try cached connection — quick liveness test to reset channel state
         if (isset($this->sshCache[$key])) {
             $conn = $this->sshCache[$key];
+            if ($conn instanceof LocalShellConnection) {
+                $conn->setTimeout($this->commandTimeoutSeconds());
+                return ['success' => true, 'connection' => $conn];
+            }
             if ($conn->isConnected()) {
                 try {
                     $conn->setTimeout(3);
@@ -287,6 +290,19 @@ class WpToolkitService
         return escapeshellarg($this->wptBinary($connection, $server));
     }
 
+    public function localWpCliBinary(?LocalShellConnection $connection = null): ?string
+    {
+        $probe = $this->probeLocalWpCliRuntime($connection);
+
+        if (!($probe['usable'] ?? false)) {
+            return null;
+        }
+
+        $binary = trim((string) ($probe['selected_binary'] ?? ''));
+
+        return $binary !== '' ? $binary : null;
+    }
+
     public function runtimeSettings(): array
     {
         $mode = strtolower(trim((string) $this->settingValue('wptoolkit_execution_mode', config('wptoolkit.execution.mode', 'auto'))));
@@ -403,14 +419,39 @@ class WpToolkitService
         return $normalized;
     }
 
+    protected function localWpCliCandidates(): array
+    {
+        $configuredPath = $this->normalizeNullableString($this->settingValue(
+            'wptoolkit_local_wp_binary_path',
+            config('wptoolkit.cli.local_wp_binary_path')
+        ));
+
+        $candidates = array_merge(
+            $configuredPath ? [$configuredPath] : [],
+            (array) config('wptoolkit.cli.local_wp_binary_candidates', []),
+            ['wp', '/usr/local/bin/wp', '/usr/bin/wp', '/opt/cpanel/composer/bin/wp']
+        );
+
+        $normalized = [];
+        foreach ($candidates as $candidate) {
+            $candidate = trim((string) $candidate);
+            if ($candidate === '' || in_array($candidate, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $candidate;
+        }
+
+        return $normalized;
+    }
+
     protected function serverMatchesLocalHost(WhmServer $server): bool
     {
-        $serverHost = $this->normalizeHost($server->hostname ?? '');
-        if ($serverHost === '') {
+        $serverAliases = $this->hostAliases((string) ($server->hostname ?? ''));
+        if ($serverAliases === []) {
             return false;
         }
 
-        return in_array($serverHost, $this->localHosts(), true);
+        return count(array_intersect($serverAliases, $this->localHostAliases())) > 0;
     }
 
     protected function localHosts(): array
@@ -440,9 +481,59 @@ class WpToolkitService
         return $hosts;
     }
 
+    protected function localHostAliases(): array
+    {
+        if ($this->localHostAliasesCache !== null) {
+            return $this->localHostAliasesCache;
+        }
+
+        $aliases = [];
+        foreach ($this->localHosts() as $host) {
+            foreach ($this->hostAliases($host) as $alias) {
+                if ($alias === '' || in_array($alias, $aliases, true)) {
+                    continue;
+                }
+                $aliases[] = $alias;
+            }
+        }
+
+        return $this->localHostAliasesCache = $aliases;
+    }
+
     protected function normalizeHost(string $host): string
     {
         return strtolower(trim($host));
+    }
+
+    protected function hostAliases(string $host): array
+    {
+        $normalized = $this->normalizeHost($host);
+        if ($normalized === '') {
+            return [];
+        }
+
+        if (array_key_exists($normalized, $this->hostAliasCache)) {
+            return $this->hostAliasCache[$normalized];
+        }
+
+        $aliases = [$normalized];
+
+        if (filter_var($normalized, FILTER_VALIDATE_IP)) {
+            $reverse = @gethostbyaddr($normalized);
+            $reverse = $this->normalizeHost((string) $reverse);
+            if ($reverse !== '' && $reverse !== $normalized) {
+                $aliases[] = $reverse;
+            }
+        } else {
+            $resolvedIp = @gethostbyname($normalized);
+            if (is_string($resolvedIp) && $resolvedIp !== '' && $resolvedIp !== $normalized) {
+                $aliases[] = $this->normalizeHost($resolvedIp);
+            }
+        }
+
+        $aliases = array_values(array_unique(array_filter($aliases, fn ($alias) => $alias !== '')));
+
+        return $this->hostAliasCache[$normalized] = $aliases;
     }
 
     protected function connectionResolutionReason(WhmServer $server, array $localProbe): string
@@ -537,6 +628,65 @@ class WpToolkitService
         $this->localProbe = $probe;
 
         return $this->localProbe;
+    }
+
+    protected function probeLocalWpCliRuntime(?LocalShellConnection $connection = null): array
+    {
+        if ($this->localWpCliProbe !== null) {
+            return $this->localWpCliProbe;
+        }
+
+        $settings = $this->runtimeSettings();
+        $connection ??= new LocalShellConnection(base_path());
+        $connection->setTimeout((int) $settings['probe_timeout']);
+
+        $probe = [
+            'transport' => 'local-wp',
+            'runtime_user' => $this->currentRuntimeUser(),
+            'hostname' => $this->normalizeHost(gethostname() ?: php_uname('n') ?: ''),
+            'usable' => false,
+            'selected_binary' => null,
+            'reason' => 'No executable local WP-CLI binary was found for the current runtime user.',
+            'candidates' => [],
+        ];
+
+        foreach ($this->localWpCliCandidates() as $candidate) {
+            $result = [
+                'path' => $candidate,
+                'exists' => null,
+                'executable' => null,
+                'exit_code' => null,
+                'version' => null,
+                'usable' => false,
+            ];
+
+            if ($candidate === 'wp') {
+                $check = $this->runCommandWithExitCode($connection, 'command -v wp >/dev/null 2>&1 && wp --info 2>&1 | head -n 1');
+                $result['exists'] = null;
+                $result['executable'] = null;
+                $result['exit_code'] = $check['exit_code'];
+                $result['version'] = $check['lines'][0] ?? null;
+                $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+            } else {
+                $result['exists'] = file_exists($candidate);
+                $result['executable'] = $result['exists'] ? is_executable($candidate) : false;
+                if ($result['exists'] && $result['executable']) {
+                    $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --info 2>&1 | head -n 1');
+                    $result['exit_code'] = $check['exit_code'];
+                    $result['version'] = $check['lines'][0] ?? null;
+                    $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+                }
+            }
+
+            $probe['candidates'][] = $result;
+            if (!$probe['usable'] && $result['usable']) {
+                $probe['usable'] = true;
+                $probe['selected_binary'] = $candidate;
+                $probe['reason'] = 'Local WP-CLI is executable by the current runtime user.';
+            }
+        }
+
+        return $this->localWpCliProbe = $probe;
     }
 
     protected function probeRemoteRuntime(WhmServer $server, ?SSH2 $existingConnection = null): array
@@ -707,17 +857,11 @@ class WpToolkitService
             $cmd .= ' -target-db-user-login ' . escapeshellarg(trim($targetDbUserLogin));
         }
 
-        $originalTimeout = $this->commandTimeoutSeconds();
-        $connection->setTimeout($this->longRunningTimeoutSeconds());
-        try {
-            $output = trim($connection->exec($cmd . ' 2>&1'));
-        } finally {
-            $connection->setTimeout($originalTimeout);
-        }
+        $output = trim($connection->exec($cmd . ' 2>&1'));
         $success = $this->toolkitOutputLooksSuccessful($output, [
-            'success',
-            'completed',
-            'cloning has finished successfully',
+            'instance-id',
+            'target-domain-name',
+            'source-instance-id',
         ]);
 
         return [
@@ -738,7 +882,6 @@ class WpToolkitService
         ?string $language = null,
         ?string $dbName = null,
         ?string $dbUser = null,
-        ?string $dbPassword = null,
         ?string $tablePrefix = null,
         ?string $siteTitle = null
     ): array {
@@ -768,10 +911,6 @@ class WpToolkitService
             if ($value !== null && trim((string) $value) !== '') {
                 $cmd .= ' ' . $flag . ' ' . escapeshellarg(trim((string) $value));
             }
-        }
-
-        if ($dbPassword !== null && trim((string) $dbPassword) !== '') {
-            $cmd = 'DB_PASSWORD=' . escapeshellarg(trim((string) $dbPassword)) . ' ' . $cmd;
         }
 
         $output = trim($connection->exec($cmd . ' 2>&1'));
@@ -836,7 +975,7 @@ class WpToolkitService
         ];
     }
 
-    public function wpCliRaw(WhmServer $server, int $installId, string $wpCliCommand, ?int $timeoutSeconds = null): array
+    public function wpCliRaw(WhmServer $server, int $installId, string $wpCliCommand): array
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -847,16 +986,7 @@ class WpToolkitService
         $wptBin = $this->shellBinary($connection, $server);
         $escapedId = escapeshellarg((string) $installId);
         $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- {$wpCliCommand} 2>&1";
-        $originalTimeout = $this->commandTimeoutSeconds();
-        $effectiveTimeout = $timeoutSeconds && $timeoutSeconds > 0
-            ? max($originalTimeout, $timeoutSeconds)
-            : $originalTimeout;
-        $connection->setTimeout($effectiveTimeout);
-        try {
-            $stdout = trim($connection->exec($cmd));
-        } finally {
-            $connection->setTimeout($originalTimeout);
-        }
+        $stdout = trim($connection->exec($cmd));
 
         return [
             'success' => true,
