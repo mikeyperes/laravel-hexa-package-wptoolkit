@@ -1004,12 +1004,20 @@ PHP;
         ];
     }
 
+    public function wpCliEval(\hexa_package_whm\Models\WhmServer $server, int $installId, string $php): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'stdout' => '', 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
+        $b64 = base64_encode($php);
+        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"$CODE\" 2>&1";
         $out = trim($this->execWithConnection($connection, $cmd));
-
-        return ["success" => true, "stdout" => $out];
+        return ['success' => true, 'stdout' => $out];
     }
-
-
     // ===== code-side unique methods (preserved during 3-way merge) =====
 
     // === wpCliBatchTerms ===
