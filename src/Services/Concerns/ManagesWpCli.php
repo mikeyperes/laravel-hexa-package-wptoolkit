@@ -426,8 +426,12 @@ trait ManagesWpCli
             $localWpBinary = $this->localWpCliBinary($connection);
             $installPath = $this->resolveInstallPath($server, $connection, $installId);
 
-            if ($runtimeUser !== 'root' && $localWpBinary && $installPath) {
-                return escapeshellarg($localWpBinary) . ' --path=' . escapeshellarg($installPath);
+            if ($localWpBinary && $installPath) {
+                $command = escapeshellarg($localWpBinary) . " --path=" . escapeshellarg($installPath);
+                if ($runtimeUser === "root") {
+                    $command .= " --allow-root";
+                }
+                return $command;
             }
         }
 
@@ -719,6 +723,7 @@ trait ManagesWpCli
         }
 
         $connection = $ssh['connection'];
+        $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $escapedId = escapeshellarg((string) $installId);
         $wptBin = $this->shellBinary($connection, $server);
         $php = <<<'PHP'
@@ -1014,7 +1019,7 @@ PHP;
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $b64 = base64_encode($php);
-        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"$CODE\" 2>&1";
+        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
         $out = trim($this->execWithConnection($connection, $cmd));
         return ['success' => true, 'stdout' => $out];
     }
