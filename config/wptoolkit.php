@@ -13,7 +13,7 @@ return [
     | Version
     |--------------------------------------------------------------------------
     */
-    'version' => '3.0.19',
+    'version' => '3.0.21',
 
     /*
     |--------------------------------------------------------------------------
@@ -55,9 +55,14 @@ return [
         'binary_path' => env('WPTOOLKIT_BINARY_PATH', null),
         'local_binary_path' => env('WPTOOLKIT_LOCAL_BINARY_PATH', null),
         'remote_binary_path' => env('WPTOOLKIT_REMOTE_BINARY_PATH', null),
+        'local_wp_binary_path' => env('WPTOOLKIT_LOCAL_WP_BINARY_PATH', null),
         'local_binary_candidates' => array_values(array_filter(array_map(
             static fn ($path) => trim((string) $path),
             explode(',', (string) env('WPTOOLKIT_LOCAL_BINARY_CANDIDATES', '/usr/local/bin/wp-toolkit,/usr/sbin/wp-toolkit,/opt/cpanel/wp-toolkit/bin/wp-toolkit'))
+        ))),
+        'local_wp_binary_candidates' => array_values(array_filter(array_map(
+            static fn ($path) => trim((string) $path),
+            explode(',', (string) env('WPTOOLKIT_LOCAL_WP_BINARY_CANDIDATES', 'wp,/usr/local/bin/wp,/usr/bin/wp,/opt/cpanel/composer/bin/wp'))
         ))),
         'remote_binary_candidates' => array_values(array_filter(array_map(
             static fn ($path) => trim((string) $path),
