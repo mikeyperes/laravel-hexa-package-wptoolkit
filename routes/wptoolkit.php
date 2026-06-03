@@ -16,6 +16,7 @@ Route::middleware(['web', 'auth', 'locked', 'system_lock', 'role'])->group(funct
     Route::post('wp-toolkit/get-all-installs', [WpToolkitDashboardController::class, 'getAllInstalls'])->name('wptoolkit.get-all-installs');
     Route::post('wp-toolkit/get-installs', [WpToolkitDashboardController::class, 'getInstalls'])->name('wptoolkit.get-installs');
     Route::post('wp-toolkit/get-credentials', [WpToolkitDashboardController::class, 'getCredentials'])->name('wptoolkit.get-credentials');
+    Route::post('wp-toolkit/media-selector', [WpToolkitDashboardController::class, 'mediaSelector'])->name('wptoolkit.media-selector');
     Route::post('wp-toolkit/wp-login', [WpToolkitDashboardController::class, 'wpLogin'])->name('wptoolkit.wp-login');
     Route::post('wp-toolkit/reset-password', [WpToolkitDashboardController::class, 'resetPassword'])->name('wptoolkit.reset-password');
     Route::post('wp-toolkit/test-login', [WpToolkitDashboardController::class, 'testLogin'])->name('wptoolkit.test-login');

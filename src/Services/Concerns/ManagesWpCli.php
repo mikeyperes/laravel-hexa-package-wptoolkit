@@ -1092,6 +1092,94 @@ PHP;
         $out = trim($this->execWithConnection($connection, $cmd));
         return ['success' => true, 'stdout' => $out];
     }
+
+    /**
+     * Return normalized WordPress media-library rows for picker UIs.
+     *
+     * This is the shared abstraction for app/package media selectors. It runs
+     * one WP bootstrap, returns thumbnails first, and includes pagination.
+     */
+    public function wpCliMediaSelector(WhmServer $server, int $installId, array $query = []): array
+    {
+        $page = max(1, (int) ($query['page'] ?? 1));
+        $perPage = max(1, min(100, (int) ($query['per_page'] ?? 60)));
+        $search = trim((string) ($query['search'] ?? ''));
+        $mimeType = trim((string) ($query['mime_type'] ?? 'image'));
+        $includeIds = array_values(array_unique(array_filter(array_map('intval', (array) ($query['include_ids'] ?? [])))));
+
+        $parts = [
+            '$page=' . $page . ';',
+            '$perPage=' . $perPage . ';',
+            '$search=' . var_export($search, true) . ';',
+            '$mimeType=' . var_export($mimeType, true) . ';',
+            '$includeIds=' . var_export($includeIds, true) . ';',
+            '$args=["post_type"=>"attachment","post_status"=>"inherit","posts_per_page"=>$perPage,"paged"=>$page,"orderby"=>"date","order"=>"DESC"];',
+            'if ($mimeType !== "") { $args["post_mime_type"]=$mimeType; }',
+            'if ($search !== "") { $args["s"]=$search; }',
+            'if (!empty($includeIds)) { $args["post__in"]=array_values(array_map("intval",$includeIds)); $args["orderby"]="post__in"; }',
+            '$q=new WP_Query($args);',
+            '$items=[];',
+            'foreach ((array) $q->posts as $post) {',
+            '  $id=(int) $post->ID;',
+            '  $full=(string) wp_get_attachment_url($id);',
+            '  $file=(string) get_attached_file($id);',
+            '  $meta=(array) wp_get_attachment_metadata($id);',
+            '  $sizes=[];',
+            '  foreach (["thumbnail","medium","medium_large","large","full"] as $size) {',
+            '    $img=wp_get_attachment_image_src($id,$size);',
+            '    if ($img) { $sizes[$size]=["url"=>(string)$img[0],"source_url"=>(string)$img[0],"width"=>(int)$img[1],"height"=>(int)$img[2]]; }',
+            '  }',
+            '  $fileName=basename($file ?: parse_url($full, PHP_URL_PATH));',
+            '  $items[]=[',
+            '    "ID"=>$id, "id"=>$id, "media_id"=>$id, "attachment_id"=>$id,',
+            '    "post_title"=>(string)$post->post_title, "title"=>(string)get_the_title($id),',
+            '    "filename"=>$fileName, "file_name"=>$fileName,',
+            '    "guid"=>$full, "url"=>$full, "media_url"=>$full, "source_url"=>$full, "full_url"=>$full,',
+            '    "thumbnail_url"=>(string)($sizes["thumbnail"]["url"] ?? $full),',
+            '    "medium_url"=>(string)($sizes["medium"]["url"] ?? ($sizes["thumbnail"]["url"] ?? $full)),',
+            '    "large_url"=>(string)($sizes["large"]["url"] ?? ($sizes["medium"]["url"] ?? $full)),',
+            '    "post_mime_type"=>(string)$post->post_mime_type, "mime_type"=>(string)$post->post_mime_type,',
+            '    "date"=>(string)$post->post_date, "modified"=>(string)$post->post_modified,',
+            '    "alt_text"=>(string)get_post_meta($id,"_wp_attachment_image_alt",true),',
+            '    "caption"=>(string)$post->post_excerpt, "description"=>(string)$post->post_content,',
+            '    "width"=>(int)($meta["width"] ?? 0), "height"=>(int)($meta["height"] ?? 0),',
+            '    "sizes"=>$sizes,',
+            '  ];',
+            '}',
+            '$payload=["success"=>true,"message"=>count($items)." media item(s) loaded via WP Toolkit selector.","items"=>$items,"total"=>(int)$q->found_posts,"page"=>$page,"per_page"=>$perPage,"total_pages"=>(int)max(1,ceil(((int)$q->found_posts)/max(1,$perPage))),"has_more"=>(bool)($page < max(1,ceil(((int)$q->found_posts)/max(1,$perPage)))),"source"=>"wptoolkit.media_selector"];',
+            'echo "HEXA_WPTK_MEDIA_SELECTOR:" . wp_json_encode($payload);',
+        ];
+
+        $result = $this->wpCliEval($server, $installId, implode('', $parts));
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'WP Toolkit media selector failed.'), 'items' => []];
+        }
+
+        $stdout = (string) ($result['stdout'] ?? '');
+        $marker = 'HEXA_WPTK_MEDIA_SELECTOR:';
+        $pos = strpos($stdout, $marker);
+        if ($pos === false) {
+            return ['success' => false, 'message' => 'Failed to parse WP Toolkit media selector output.', 'items' => [], 'raw_output' => $stdout];
+        }
+        $json = trim(substr($stdout, $pos + strlen($marker)));
+        $start = strpos($json, '{');
+        $end = strrpos($json, '}');
+        if ($start === false || $end === false || $end < $start) {
+            return ['success' => false, 'message' => 'WP Toolkit media selector returned malformed JSON.', 'items' => [], 'raw_output' => $stdout];
+        }
+        $payload = json_decode(substr($json, $start, $end - $start + 1), true);
+        if (!is_array($payload)) {
+            return ['success' => false, 'message' => 'WP Toolkit media selector JSON decode failed.', 'items' => [], 'raw_output' => $stdout];
+        }
+
+        $payload['items'] = array_values(array_filter((array) ($payload['items'] ?? []), 'is_array'));
+        $payload['success'] = (bool) ($payload['success'] ?? true);
+        $payload['message'] = (string) ($payload['message'] ?? (count($payload['items']) . ' media item(s) loaded via WP Toolkit selector.'));
+        $payload['source'] = 'wptoolkit.media_selector';
+
+        return $payload;
+    }
+
     // ===== code-side unique methods (preserved during 3-way merge) =====
 
     // === wpCliBatchTerms ===

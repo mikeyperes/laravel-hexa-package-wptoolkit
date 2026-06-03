@@ -136,6 +136,40 @@ class WpToolkitDashboardController extends Controller
     }
 
     /**
+     * AJAX: Shared WordPress media selector.
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function mediaSelector(Request $request): JsonResponse
+    {
+        $request->validate([
+            'server_id'  => 'required|integer|exists:whm_servers,id',
+            'install_id' => 'required|integer',
+            'username'   => 'required|string|max:255',
+            'search'     => 'nullable|string|max:255',
+            'mime_type'  => 'nullable|string|max:80',
+            'page'       => 'nullable|integer|min:1',
+            'per_page'   => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $account = $this->authorizeAccountRequest($request);
+
+        $result = $this->wpToolkit->wpCliMediaSelector(
+            $account->whmServer,
+            (int) $request->input('install_id'),
+            [
+                'search' => (string) $request->input('search', ''),
+                'mime_type' => (string) $request->input('mime_type', 'image'),
+                'page' => (int) $request->input('page', 1),
+                'per_page' => (int) $request->input('per_page', 60),
+            ]
+        );
+
+        return response()->json($result);
+    }
+
+    /**
      * AJAX: Get admin credentials for a WordPress install.
      *
      * @param Request $request
