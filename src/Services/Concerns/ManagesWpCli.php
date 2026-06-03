@@ -143,6 +143,12 @@ trait ManagesWpCli
         if (array_key_exists('title', $postData)) {
             $cmd .= ' --post_title=' . escapeshellarg((string) $postData['title']);
         }
+        if (array_key_exists('slug', $postData) || array_key_exists('post_name', $postData)) {
+            $slug = trim((string) ($postData['slug'] ?? $postData['post_name'] ?? ''));
+            if ($slug !== '') {
+                $cmd .= ' --post_name=' . escapeshellarg($slug);
+            }
+        }
         if (array_key_exists('status', $postData)) {
             $cmd .= ' --post_status=' . escapeshellarg((string) $postData['status']);
         }
@@ -166,6 +172,43 @@ trait ManagesWpCli
             }
         }
 
+        $hasFeaturedOnlyUpdate = array_key_exists('featured_media', $postData)
+            && !array_key_exists('title', $postData)
+            && !array_key_exists('slug', $postData)
+            && !array_key_exists('post_name', $postData)
+            && !array_key_exists('status', $postData)
+            && !array_key_exists('excerpt', $postData)
+            && !$tmpFile
+            && empty($postData['categories'])
+            && empty($postData['date'])
+            && empty($postData['author']);
+
+        if ($hasFeaturedOnlyUpdate) {
+            try {
+                $featuredMediaId = (int) $postData['featured_media'];
+                if ($featuredMediaId > 0) {
+                    $metaCmd = "{$wpCliBase} post meta update {$postId} _thumbnail_id " . escapeshellarg((string) $featuredMediaId) . ' 2>&1';
+                } else {
+                    $metaCmd = "{$wpCliBase} post meta delete {$postId} _thumbnail_id 2>&1";
+                }
+                $metaOutput = trim($this->execWithConnection($connection, $metaCmd));
+                if (!str_contains($metaOutput, 'Success:') && !($featuredMediaId === 0 && str_contains($metaOutput, 'Could not delete meta value'))) {
+                    $this->generic->log('error', '[WpToolkit] wpCliUpdatePost featured media update failed', ['output' => $metaOutput, 'post_id' => $postId]);
+                    return ['success' => false, 'message' => 'wp-cli featured media update failed: ' . \Illuminate\Support\Str::limit($metaOutput, 300)];
+                }
+                $details = $this->wpCliGetPost($server, $installId, $postId);
+                return [
+                    'success' => true,
+                    'message' => $featuredMediaId > 0 ? "Featured image updated (ID: {$postId})" : "Featured image cleared (ID: {$postId})",
+                    'data' => $details['data'] ?? ['post_id' => $postId],
+                ];
+            } finally {
+                foreach ($tmpFiles as $file) {
+                    $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($file));
+                }
+            }
+        }
+
         $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
 
         try {
@@ -181,8 +224,13 @@ trait ManagesWpCli
                     $this->execWithConnection($connection, $tagCmd);
                 }
 
-                if (array_key_exists('featured_media', $postData) && !empty($postData['featured_media'])) {
-                    $metaCmd = "{$wpCliBase} post meta update {$postId} _thumbnail_id " . escapeshellarg((string) ((int) $postData['featured_media'])) . ' 2>&1';
+                if (array_key_exists('featured_media', $postData)) {
+                    $featuredMediaId = (int) $postData['featured_media'];
+                    if ($featuredMediaId > 0) {
+                        $metaCmd = "{$wpCliBase} post meta update {$postId} _thumbnail_id " . escapeshellarg((string) $featuredMediaId) . ' 2>&1';
+                    } else {
+                        $metaCmd = "{$wpCliBase} post meta delete {$postId} _thumbnail_id 2>&1";
+                    }
                     $this->execWithConnection($connection, $metaCmd);
                 }
 
@@ -210,6 +258,14 @@ trait ManagesWpCli
             foreach ($tmpFiles as $file) {
                 $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($file));
             }
+        }
+
+        if (stripos($output, 'Invalid page template') !== false) {
+            $fallback = $this->wpCliUpdatePostViaEval($connection, $wpCliBase, $postId, $postData);
+            if (($fallback['success'] ?? false)) {
+                return $fallback;
+            }
+            $output .= "\nFallback eval update failed: " . (string) ($fallback['message'] ?? 'unknown error');
         }
 
         $this->generic->log('error', '[WpToolkit] wpCliUpdatePost failed', ['output' => $output, 'post_id' => $postId]);
@@ -280,6 +336,9 @@ trait ManagesWpCli
     public function wpCliUploadMedia(WhmServer $server, int $installId, string $imageUrl, string $filename = '', string $altText = '', string $caption = '', string $description = ''): array
     {
         $imageUrl = trim(html_entity_decode($imageUrl, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if (!filter_var($imageUrl, FILTER_VALIDATE_URL) || !preg_match('/^https?:\/\//i', $imageUrl)) {
+            return ['success' => false, 'message' => 'Image URL must be a direct http(s) URL for WordPress media import.'];
+        }
 
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -303,6 +362,8 @@ trait ManagesWpCli
         $tmpDir = rtrim($installPath, '/') . '/.hexa-import-' . uniqid();
         $tmpFile = $tmpDir . '/' . $targetFilename;
         $this->execWithConnection($connection, "mkdir -p " . escapeshellarg($tmpDir));
+        $gdRequireFile = $this->stageGdImageEditorRequire($connection, $tmpDir);
+        $gdRequireArg = $gdRequireFile !== "" ? " --require=" . escapeshellarg($gdRequireFile) : "";
         $curlCmd = "curl -fsSL --compressed --connect-timeout 8 --max-time 25 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o "
             . escapeshellarg($tmpFile)
             . " "
@@ -323,12 +384,20 @@ trait ManagesWpCli
         }
         $this->generic->log('info', '[WpToolkit] Image downloaded', ['url' => \Illuminate\Support\Str::limit($imageUrl, 100), 'size' => $fileSize, 'filename' => $targetFilename]);
 
+        $mediaProbe = $this->normalizeStagedImageForWpImport($connection, $tmpDir, $tmpFile, $targetFilename);
+        if (!($mediaProbe['success'] ?? false)) {
+            $this->execWithConnection($connection, "rm -rf " . escapeshellarg($tmpDir));
+            return ['success' => false, 'message' => (string) ($mediaProbe['message'] ?? 'Downloaded file is not an allowed WordPress image.')];
+        }
+        $tmpFile = (string) $mediaProbe['path'];
+        $targetFilename = (string) $mediaProbe['filename'];
+
         $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
         $fileNameArg = $filename ? " --file_name=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
         $altArg = $altText ? " --alt=" . escapeshellarg($altText) : '';
         $captionArg = $caption ? " --caption=" . escapeshellarg($caption) : '';
         $descriptionArg = $description ? " --desc=" . escapeshellarg($description) : '';
-        $cmd = "{$wpCliBase} media import "
+        $cmd = "{$wpCliBase}{$gdRequireArg} media import "
             . escapeshellarg($tmpFile)
             . $fileNameArg
             . $titleArg
@@ -1241,15 +1310,64 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
         $tmpDir = rtrim($installPath, "/") . "/.hexa-import-" . uniqid();
         $tmpFile = $tmpDir . "/" . $targetFilename;
 
-        $stageCommand = "mkdir -p " . escapeshellarg($tmpDir)
-            . " && test -r " . escapeshellarg($sourcePath)
-            . " && cp -f " . escapeshellarg($sourcePath) . " " . escapeshellarg($tmpFile)
-            . " && chmod 644 " . escapeshellarg($tmpFile)
-            . " 2>&1";
-        $copy = $this->runCommandWithExitCode(
-            $connection,
-            $this->localFilesystemCommand($connection, $stageCommand)
-        );
+        if ($connection instanceof LocalShellConnection) {
+            $stageCommand = "mkdir -p " . escapeshellarg($tmpDir)
+                . " && test -r " . escapeshellarg($sourcePath)
+                . " && cp -f " . escapeshellarg($sourcePath) . " " . escapeshellarg($tmpFile)
+                . " && chmod 644 " . escapeshellarg($tmpFile)
+                . " 2>&1";
+            $copy = $this->runCommandWithExitCode(
+                $connection,
+                $this->localFilesystemCommand($connection, $stageCommand)
+            );
+        } else {
+            $mkdir = $this->runCommandWithExitCode($connection, "mkdir -p " . escapeshellarg($tmpDir) . " 2>&1");
+            $put = false;
+            $putMessage = "";
+            if (($mkdir["exit_code"] ?? 1) === 0 && is_file($sourcePath) && is_readable($sourcePath)) {
+                $contents = file_get_contents($sourcePath);
+                if ($contents !== false) {
+                    $encoded = base64_encode($contents);
+                    $base64Path = $tmpFile . ".b64";
+                    $reset = $this->runCommandWithExitCode($connection, ": > " . escapeshellarg($base64Path) . " 2>&1");
+                    if (($reset["exit_code"] ?? 1) === 0) {
+                        $put = true;
+                        foreach (str_split($encoded, 60000) as $chunk) {
+                            $chunkWrite = $this->runCommandWithExitCode($connection, "printf %s " . escapeshellarg($chunk) . " >> " . escapeshellarg($base64Path) . " 2>&1");
+                            if (($chunkWrite["exit_code"] ?? 1) !== 0) {
+                                $put = false;
+                                $putMessage = $chunkWrite["clean_output"] ?: ($chunkWrite["raw_output"] ?: "remote base64 chunk write failed");
+                                break;
+                            }
+                        }
+                        if ($put) {
+                            $decode = $this->runCommandWithExitCode(
+                                $connection,
+                                "base64 -d " . escapeshellarg($base64Path) . " > " . escapeshellarg($tmpFile)
+                                    . " && rm -f " . escapeshellarg($base64Path)
+                                    . " && chmod 644 " . escapeshellarg($tmpFile)
+                                    . " 2>&1"
+                            );
+                            $put = (($decode["exit_code"] ?? 1) === 0);
+                            if (!$put) {
+                                $putMessage = $decode["clean_output"] ?: ($decode["raw_output"] ?: "remote base64 decode failed");
+                            }
+                        }
+                    } else {
+                        $putMessage = $reset["clean_output"] ?: ($reset["raw_output"] ?: "remote base64 stage file could not be created");
+                    }
+                } else {
+                    $putMessage = "source file could not be read";
+                }
+            } else {
+                $putMessage = $mkdir["clean_output"] ?: ($mkdir["raw_output"] ?: "remote staging directory could not be created");
+            }
+            $copy = [
+                "exit_code" => $put ? 0 : 1,
+                "clean_output" => $put ? "" : ($putMessage ?: "remote file staging failed"),
+                "raw_output" => $put ? "" : ($putMessage ?: "remote file staging failed"),
+            ];
+        }
         $fileSize = trim($this->execWithConnection(
             $connection,
             $this->localFilesystemCommand($connection, "stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0")
@@ -1268,12 +1386,23 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
             return ["success" => false, "message" => "Could not stage the media file for the local WordPress import: " . \Illuminate\Support\Str::limit($cleanOutput ?: "copy failed", 300)];
         }
 
+        $mediaProbe = $this->normalizeStagedImageForWpImport($connection, $tmpDir, $tmpFile, $targetFilename, true);
+        if (!($mediaProbe['success'] ?? false)) {
+            $this->execWithConnection($connection, $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)));
+            return ['success' => false, 'message' => (string) ($mediaProbe['message'] ?? 'Staged file is not an allowed WordPress image.')];
+        }
+        $tmpFile = (string) $mediaProbe['path'];
+        $targetFilename = (string) $mediaProbe['filename'];
+
+        $gdRequireFile = $this->stageGdImageEditorRequire($connection, $tmpDir);
+        $gdRequireArg = $gdRequireFile !== "" ? " --require=" . escapeshellarg($gdRequireFile) : "";
+
         $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : "";
         $fileNameArg = $filename ? " --file_name=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : "";
         $altArg = $altText ? " --alt=" . escapeshellarg($altText) : "";
         $captionArg = $caption ? " --caption=" . escapeshellarg($caption) : "";
         $descriptionArg = $description ? " --desc=" . escapeshellarg($description) : "";
-        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- media import "
+        $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} --{$gdRequireArg} media import "
             . escapeshellarg($tmpFile)
             . $fileNameArg
             . $titleArg
@@ -1359,6 +1488,107 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
             "source_path" => $sourcePath,
         ]);
         return ["success" => false, "message" => "wp-cli media import failed: " . \Illuminate\Support\Str::limit($cleanOutput ?: "unknown error", 300)];
+    }
+
+
+
+    protected function wpCliUpdatePostViaEval(SSH2|LocalShellConnection $connection, string $wpCliBase, int $postId, array $postData): array
+    {
+        $payload = [];
+        foreach (['title', 'content', 'status', 'excerpt', 'date', 'author', 'slug', 'post_name', 'featured_media', 'categories', 'tags'] as $field) {
+            if (array_key_exists($field, $postData)) {
+                $payload[$field] = $postData[$field];
+            }
+        }
+
+        $php = '$postId=' . $postId . ';'
+            . '$payload=' . var_export($payload, true) . ';'
+            . '$post=["ID"=>$postId];'
+            . 'foreach (["title"=>"post_title","content"=>"post_content","status"=>"post_status","excerpt"=>"post_excerpt","date"=>"post_date","author"=>"post_author"] as $src=>$dest) { if (array_key_exists($src,$payload) && $payload[$src] !== null && $payload[$src] !== "") { $post[$dest]=(string) $payload[$src]; } }'
+            . 'if (array_key_exists("slug",$payload) && trim((string)$payload["slug"]) !== "") { $post["post_name"]=(string) $payload["slug"]; } elseif (array_key_exists("post_name",$payload) && trim((string)$payload["post_name"]) !== "") { $post["post_name"]=(string) $payload["post_name"]; }'
+            . '$result=wp_update_post($post,true);'
+            . 'if (is_wp_error($result)) { echo "HEXA_POST_UPDATE:" . wp_json_encode(["success"=>false,"message"=>$result->get_error_message()]); return; }'
+            . 'if (!empty($payload["categories"]) && is_array($payload["categories"])) { wp_set_post_terms($postId, array_values(array_filter(array_map("intval", $payload["categories"]))), "category", false); }'
+            . 'if (!empty($payload["tags"]) && is_array($payload["tags"])) { wp_set_post_terms($postId, array_values(array_filter(array_map("intval", $payload["tags"]))), "post_tag", false); }'
+            . 'if (array_key_exists("featured_media",$payload)) { $featured=(int)$payload["featured_media"]; if ($featured > 0) { update_post_meta($postId,"_thumbnail_id",$featured); } else { delete_post_meta($postId,"_thumbnail_id"); } }'
+            . 'clean_post_cache($postId);'
+            . '$postObj=get_post($postId);'
+            . 'echo "HEXA_POST_UPDATE:" . wp_json_encode(["success"=>true,"message"=>"Post updated (ID: " . $postId . ")","data"=>["post_id"=>$postId,"post_url"=>get_permalink($postId),"post_status"=>get_post_status($postId),"post_title"=>$postObj ? (string) $postObj->post_title : "","post_date"=>$postObj ? (string) $postObj->post_date : null]]);';
+        $encoded = base64_encode($php);
+        $cmd = "CODE=$(printf %s " . escapeshellarg($encoded) . " | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
+        $result = $this->runCommandWithExitCode($connection, $cmd);
+        $raw = (string) ($result['raw_output'] ?? '');
+        $marker = 'HEXA_POST_UPDATE:';
+        $position = strrpos($raw, $marker);
+        if ($position === false) {
+            $cleanOutput = (string) (($result['clean_output'] ?? '') ?: $raw);
+            return ['success' => false, 'message' => 'Fallback eval update failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'no marker returned', 300)];
+        }
+
+        $decoded = json_decode(trim(substr($raw, $position + strlen($marker))), true);
+        if (!is_array($decoded)) {
+            return ['success' => false, 'message' => 'Fallback eval update returned invalid JSON.'];
+        }
+
+        return $decoded;
+    }
+
+    protected function normalizeStagedImageForWpImport(SSH2|LocalShellConnection $connection, string $tmpDir, string $tmpFile, string $targetFilename, bool $useLocalFilesystem = false): array
+    {
+        $command = "file -b --mime-type " . escapeshellarg($tmpFile) . " 2>/dev/null || true";
+        $mimeOutput = trim($this->execWithConnection($connection, $useLocalFilesystem ? $this->localFilesystemCommand($connection, $command) : $command));
+        $mime = strtolower(trim((string) (preg_split('/\R/', $mimeOutput)[0] ?? '')));
+        $allowed = [
+            'image/jpeg' => 'jpg',
+            'image/pjpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/webp' => 'webp',
+            'image/svg+xml' => 'svg',
+            'image/avif' => 'avif',
+        ];
+
+        if (!isset($allowed[$mime])) {
+            $detected = $mime !== '' ? $mime : 'unknown';
+            return ['success' => false, 'message' => 'Downloaded file is not an allowed WordPress image (detected ' . $detected . '). Use a direct image URL, not a preview page URL.'];
+        }
+
+        $extension = $allowed[$mime];
+        $currentExtension = strtolower((string) pathinfo($targetFilename, PATHINFO_EXTENSION));
+        $equivalentJpeg = in_array($currentExtension, ['jpg', 'jpeg'], true) && in_array($extension, ['jpg', 'jpeg'], true);
+        if ($currentExtension === $extension || $equivalentJpeg) {
+            return ['success' => true, 'path' => $tmpFile, 'filename' => $targetFilename, 'mime' => $mime, 'extension' => $extension];
+        }
+
+        $base = (string) pathinfo($targetFilename, PATHINFO_FILENAME);
+        $base = trim((string) preg_replace('/[^A-Za-z0-9._-]+/', '-', $base), '.-_');
+        if ($base === '') {
+            $base = 'hexa-upload-' . uniqid();
+        }
+
+        $normalizedFilename = $base . '.' . $extension;
+        $normalizedPath = rtrim($tmpDir, '/') . '/' . $normalizedFilename;
+        $moveCommand = 'mv -f ' . escapeshellarg($tmpFile) . ' ' . escapeshellarg($normalizedPath) . ' && chmod 644 ' . escapeshellarg($normalizedPath) . ' 2>&1';
+        $move = $this->runCommandWithExitCode($connection, $useLocalFilesystem ? $this->localFilesystemCommand($connection, $moveCommand) : $moveCommand);
+        if (($move['exit_code'] ?? 1) !== 0) {
+            $cleanOutput = (string) (($move['clean_output'] ?? '') ?: ($move['raw_output'] ?? ''));
+            return ['success' => false, 'message' => 'Could not normalize imported image extension: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'move failed', 300)];
+        }
+
+        return ['success' => true, 'path' => $normalizedPath, 'filename' => $normalizedFilename, 'mime' => $mime, 'extension' => $extension];
+    }
+
+    protected function stageGdImageEditorRequire(SSH2|LocalShellConnection $connection, string $tmpDir): string
+    {
+        $requireFile = rtrim($tmpDir, "/") . "/hexa-force-gd-editor.php";
+        $php = "<?php if (class_exists(\"WP_CLI\")) { WP_CLI::add_hook(\"after_wp_load\", static function () { add_filter(\"wp_image_editors\", static function () { return [\"WP_Image_Editor_GD\"]; }, 999); }); }";
+        $command = "printf %s " . escapeshellarg($php)
+            . " > " . escapeshellarg($requireFile)
+            . " && chmod 644 " . escapeshellarg($requireFile)
+            . " 2>&1";
+        $result = $this->runCommandWithExitCode($connection, $this->localFilesystemCommand($connection, $command));
+
+        return (($result["exit_code"] ?? 1) === 0) ? $requireFile : "";
     }
 
 

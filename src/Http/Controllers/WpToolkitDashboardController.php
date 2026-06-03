@@ -26,6 +26,27 @@ class WpToolkitDashboardController extends Controller
     }
 
     /**
+     * Resolve and authorize the cPanel account attached to a terminal-scoped request.
+     *
+     * @param Request $request
+     * @return HostingAccount
+     */
+    protected function authorizeAccountRequest(Request $request): HostingAccount
+    {
+        $account = HostingAccount::with('whmServer')
+            ->where('whm_server_id', (int) $request->input('server_id'))
+            ->where('username', (string) $request->input('username'))
+            ->firstOrFail();
+
+        $accessService = 'hexa_app_code_portal\\Portal\\Terminal\\Support\\TerminalAccountAccessService';
+        if (class_exists($accessService)) {
+            abort_unless(app($accessService)->canAccess(auth()->user(), (int) $account->id), 403);
+        }
+
+        return $account;
+    }
+
+    /**
      * Show the WP Toolkit test dashboard.
      *
      * @return \Illuminate\View\View
@@ -103,10 +124,13 @@ class WpToolkitDashboardController extends Controller
             'username'  => 'required|string|max:255',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
-        $username = $request->input('username');
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
+        $username = $account->username;
 
         $result = $this->wpToolkit->getInstallsForAccount($server, $username);
+        // Account-scoped UI must not expose raw server-wide wp-toolkit output.
+        unset($result["raw_output"]);
 
         return response()->json($result);
     }
@@ -127,13 +151,14 @@ class WpToolkitDashboardController extends Controller
             'login_url'  => 'nullable|string',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
 
         $result = $this->wpToolkit->getCredentials(
             $server,
             (int) $request->input('install_id'),
             $request->input('wp_path'),
-            $request->input('username'),
+            $account->username,
             $request->input('login_url')
         );
 
@@ -154,16 +179,19 @@ class WpToolkitDashboardController extends Controller
             'username'  => 'required|string|max:255',
             'wp_user'   => 'required|string|max:255',
             'site_url'  => 'required|string',
+            'redirect'  => 'nullable|string|max:255',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
 
         $result = $this->wpToolkit->generateWordPressLoginUrl(
             $server,
             $request->input('wp_path'),
-            $request->input('username'),
+            $account->username,
             $request->input('wp_user'),
-            $request->input('site_url')
+            $request->input('site_url'),
+            (string) $request->input('redirect', '')
         );
 
         return response()->json($result);
@@ -186,13 +214,14 @@ class WpToolkitDashboardController extends Controller
             'password'   => 'nullable|string|min:8|max:255',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
 
         $result = $this->wpToolkit->resetWordPressPassword(
             $server,
             (int) $request->input('install_id'),
             $request->input('wp_path'),
-            $request->input('username'),
+            $account->username,
             $request->input('wp_user'),
             $request->input('password')
         );
@@ -217,13 +246,14 @@ class WpToolkitDashboardController extends Controller
             'password'   => 'required|string|max:255',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
 
         $result = $this->wpToolkit->testWordPressPassword(
             $server,
             (int) $request->input('install_id'),
             $request->input('wp_path'),
-            $request->input('username'),
+            $account->username,
             $request->input('wp_user'),
             $request->input('password')
         );
@@ -244,8 +274,9 @@ class WpToolkitDashboardController extends Controller
             'username'  => 'required|string|max:255',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
-        $result = $this->wpToolkit->generateCpanelLoginUrl($server, $request->input('username'));
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
+        $result = $this->wpToolkit->generateCpanelLoginUrl($server, $account->username);
 
         return response()->json($result);
     }
@@ -263,8 +294,9 @@ class WpToolkitDashboardController extends Controller
             'username'  => 'required|string|max:255',
         ]);
 
-        $server = WhmServer::findOrFail($request->input('server_id'));
-        $result = $this->wpToolkit->generateWhmResellerLoginUrl($server, $request->input('username'));
+        $account = $this->authorizeAccountRequest($request);
+        $server = $account->whmServer;
+        $result = $this->wpToolkit->generateWhmResellerLoginUrl($server, $account->username);
 
         return response()->json($result);
     }
@@ -354,3 +386,5 @@ class WpToolkitDashboardController extends Controller
         ]);
     }
 }
+
+
