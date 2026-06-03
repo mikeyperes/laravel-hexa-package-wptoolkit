@@ -24,7 +24,7 @@ trait ManagesLogins
      * @param string    $siteUrl   The site URL for building the login link
      * @return array{success: bool, url?: string, expires_in?: int, error?: string}
      */
-    public function generateWordPressLoginUrl(WhmServer $server, string $wpPath, string $username, string $wpUser, string $siteUrl): array
+    public function generateWordPressLoginUrl(WhmServer $server, string $wpPath, string $username, string $wpUser, string $siteUrl, string $redirectPath = ''): array
     {
         $this->generic->log('info', '[WpToolkit] generateWordPressLoginUrl', [
             'server'  => $server->name,
@@ -63,7 +63,7 @@ add_action('init', function() {
     wp_set_auth_cookie($user->ID, true);
     wp_set_current_user($user->ID);
     @unlink(__FILE__);
-    wp_safe_redirect(admin_url());
+    wp_safe_redirect(admin_url('__REDIRECT__'));
     exit;
 }, 1);
 if (time() > __EXPIRY__) { @unlink(__FILE__); }
@@ -72,6 +72,9 @@ PHP;
         $muPlugin = str_replace('__TOKEN__', $token, $muPlugin);
         $muPlugin = str_replace('__EXPIRY__', (string) $expiry, $muPlugin);
         $muPlugin = str_replace('__WP_USER__', addslashes($wpUser), $muPlugin);
+        $safeRedirect = ltrim((string) preg_replace('#^https?://[^/]+#i', '', $redirectPath), '/');
+        $safeRedirect = (string) preg_replace('#^wp-admin/#', '', $safeRedirect);
+        $muPlugin = str_replace('__REDIRECT__', addslashes($safeRedirect), $muPlugin);
 
         $b64 = base64_encode($muPlugin);
         $escapedPath = escapeshellarg($wpPath);

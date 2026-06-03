@@ -862,7 +862,16 @@ class WpToolkitService
             $cmd .= ' -target-db-user-login ' . escapeshellarg(trim($targetDbUserLogin));
         }
 
-        $output = trim($connection->exec($cmd . ' 2>&1'));
+        $previousTimeout = $this->commandTimeoutSeconds();
+        $cloneTimeout = max($previousTimeout, (int) config('wptoolkit.clone_timeout', 900));
+        $connection->setTimeout($cloneTimeout);
+
+        try {
+            $output = trim($connection->exec($cmd . ' 2>&1'));
+        } finally {
+            $connection->setTimeout($previousTimeout);
+        }
+
         $success = $this->toolkitOutputLooksSuccessful($output, [
             'instance-id',
             'target-domain-name',
