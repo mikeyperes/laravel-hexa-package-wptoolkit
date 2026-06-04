@@ -261,10 +261,17 @@ trait ManagesWpCli
         }
 
         if (stripos($output, 'Invalid page template') !== false) {
+            $pluginFallback = $this->wpCliUpdatePostViaPluginEval($server, $installId, $postId, $postData);
+            if (($pluginFallback['success'] ?? false)) {
+                return $pluginFallback;
+            }
+
             $fallback = $this->wpCliUpdatePostViaEval($connection, $wpCliBase, $postId, $postData);
             if (($fallback['success'] ?? false)) {
                 return $fallback;
             }
+
+            $output .= "\nPlugin-loaded eval update failed: " . (string) ($pluginFallback['message'] ?? 'unknown error');
             $output .= "\nFallback eval update failed: " . (string) ($fallback['message'] ?? 'unknown error');
         }
 
@@ -1659,7 +1666,7 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
 
 
 
-    protected function wpCliUpdatePostViaEval(SSH2|LocalShellConnection $connection, string $wpCliBase, int $postId, array $postData): array
+    protected function wpCliUpdatePostEvalPhp(int $postId, array $postData): string
     {
         $payload = [];
         foreach (['title', 'content', 'status', 'excerpt', 'date', 'author', 'slug', 'post_name', 'featured_media', 'categories', 'tags'] as $field) {
@@ -1668,7 +1675,7 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
             }
         }
 
-        $php = '$postId=' . $postId . ';'
+        return '$postId=' . $postId . ';'
             . '$payload=' . var_export($payload, true) . ';'
             . '$post=["ID"=>$postId];'
             . 'foreach (["title"=>"post_title","content"=>"post_content","status"=>"post_status","excerpt"=>"post_excerpt","date"=>"post_date","author"=>"post_author"] as $src=>$dest) { if (array_key_exists($src,$payload) && $payload[$src] !== null && $payload[$src] !== "") { $post[$dest]=(string) $payload[$src]; } }'
@@ -1681,20 +1688,43 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
             . 'clean_post_cache($postId);'
             . '$postObj=get_post($postId);'
             . 'echo "HEXA_POST_UPDATE:" . wp_json_encode(["success"=>true,"message"=>"Post updated (ID: " . $postId . ")","data"=>["post_id"=>$postId,"post_url"=>get_permalink($postId),"post_status"=>get_post_status($postId),"post_title"=>$postObj ? (string) $postObj->post_title : "","post_date"=>$postObj ? (string) $postObj->post_date : null]]);';
-        $encoded = base64_encode($php);
+    }
+
+    protected function wpCliUpdatePostViaPluginEval(WhmServer $server, int $installId, int $postId, array $postData): array
+    {
+        $result = $this->wpCliEvalWithPlugins($server, $installId, $this->wpCliUpdatePostEvalPhp($postId, $postData), 120);
+        if (!($result['success'] ?? false)) {
+            return ['success' => false, 'message' => (string) ($result['message'] ?? 'Plugin-loaded eval update failed.')];
+        }
+
+        $decoded = $this->decodeWpCliPostUpdateMarker((string) ($result['stdout'] ?? ''));
+        if (!($decoded['success'] ?? false)) {
+            $decoded['message'] = 'Plugin-loaded eval update failed: ' . (string) ($decoded['message'] ?? 'unknown error');
+        }
+
+        return $decoded;
+    }
+
+    protected function wpCliUpdatePostViaEval(SSH2|LocalShellConnection $connection, string $wpCliBase, int $postId, array $postData): array
+    {
+        $encoded = base64_encode($this->wpCliUpdatePostEvalPhp($postId, $postData));
         $cmd = "CODE=$(printf %s " . escapeshellarg($encoded) . " | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
         $result = $this->runCommandWithExitCode($connection, $cmd);
-        $raw = (string) ($result['raw_output'] ?? '');
+
+        return $this->decodeWpCliPostUpdateMarker((string) ($result['raw_output'] ?? ''));
+    }
+
+    protected function decodeWpCliPostUpdateMarker(string $raw): array
+    {
         $marker = 'HEXA_POST_UPDATE:';
         $position = strrpos($raw, $marker);
         if ($position === false) {
-            $cleanOutput = (string) (($result['clean_output'] ?? '') ?: $raw);
-            return ['success' => false, 'message' => 'Fallback eval update failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'no marker returned', 300)];
+            return ['success' => false, 'message' => 'Post update eval returned no marker: ' . \Illuminate\Support\Str::limit($raw ?: 'no output', 300)];
         }
 
         $decoded = json_decode(trim(substr($raw, $position + strlen($marker))), true);
         if (!is_array($decoded)) {
-            return ['success' => false, 'message' => 'Fallback eval update returned invalid JSON.'];
+            return ['success' => false, 'message' => 'Post update eval returned invalid JSON.'];
         }
 
         return $decoded;
