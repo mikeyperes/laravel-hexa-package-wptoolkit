@@ -1094,6 +1094,85 @@ PHP;
     }
 
     /**
+     * Run PHP through the site's native wp binary at the resolved install path.
+     *
+     * The WP Toolkit wrapper is fast and stable for most operations, but some
+     * plugin commands/hooks are only registered in a normal wp-cli bootstrap.
+     */
+    public function wpCliEvalWithPlugins(\hexa_package_whm\Models\WhmServer $server, int $installId, string $php, int $timeout = 120): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return ['success' => false, 'stdout' => '', 'message' => $ssh['error'] ?? 'SSH connection failed'];
+        }
+
+        $connection = $ssh['connection'];
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        if (!$installPath) {
+            return ['success' => false, 'stdout' => '', 'message' => 'Unable to resolve WordPress install path for direct wp-cli eval.'];
+        }
+
+        $wpBinary = $this->resolveDirectWpCliBinary($connection);
+        if ($wpBinary === '') {
+            return ['success' => false, 'stdout' => '', 'message' => 'Unable to locate a native wp-cli binary on the target server.'];
+        }
+
+        $previousTimeout = $this->commandTimeoutSeconds();
+        if (method_exists($connection, 'setTimeout')) {
+            $connection->setTimeout(max(10, $timeout));
+        }
+
+        try {
+            $b64 = base64_encode($php);
+            $cmd = 'CODE=$(printf %s ' . escapeshellarg($b64) . ' | base64 -d) && '
+                . escapeshellarg($wpBinary)
+                . ' --path=' . escapeshellarg($installPath)
+                . ' --allow-root eval "$CODE" 2>&1';
+            $result = $this->runCommandWithExitCode($connection, $cmd);
+        } finally {
+            if (method_exists($connection, 'setTimeout')) {
+                $connection->setTimeout($previousTimeout);
+            }
+        }
+
+        $stdout = trim((string) ($result['clean_output'] ?: $result['raw_output']));
+        $combined = strtolower($stdout);
+        $success = (int) ($result['exit_code'] ?? 1) === 0
+            && !str_contains($combined, 'fatal error')
+            && !str_contains($combined, 'parse error');
+
+        return [
+            'success' => $success,
+            'stdout' => $stdout,
+            'message' => $success ? 'Direct wp-cli eval completed.' : 'Direct wp-cli eval failed: ' . \Illuminate\Support\Str::limit($stdout ?: 'unknown error', 300),
+            'exit_code' => $result['exit_code'] ?? null,
+            'wp_binary' => $wpBinary,
+            'install_path' => $installPath,
+        ];
+    }
+
+    protected function resolveDirectWpCliBinary(SSH2|LocalShellConnection $connection): string
+    {
+        $candidates = ['wp', '/usr/local/bin/wp', '/usr/bin/wp', '/opt/cpanel/composer/bin/wp'];
+        foreach ($candidates as $candidate) {
+            $check = $candidate === 'wp'
+                ? 'command -v wp 2>/dev/null'
+                : 'test -x ' . escapeshellarg($candidate) . ' && printf %s ' . escapeshellarg($candidate);
+            $result = $this->runCommandWithExitCode($connection, $check);
+            if ((int) ($result['exit_code'] ?? 1) !== 0) {
+                continue;
+            }
+            $path = trim((string) ($result['clean_output'] ?: $result['raw_output']));
+            $path = strtok($path, "\r\n") ?: '';
+            if ($path !== '') {
+                return $path;
+            }
+        }
+
+        return '';
+    }
+
+    /**
      * Return normalized WordPress media-library rows for picker UIs.
      *
      * This is the shared abstraction for app/package media selectors. It runs
