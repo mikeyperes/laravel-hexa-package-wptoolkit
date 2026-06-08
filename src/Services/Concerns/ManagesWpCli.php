@@ -562,7 +562,7 @@ trait ManagesWpCli
 
         $escapedId = escapeshellarg((string) $installId);
         $info = $this->runCommandWithExitCode($connection, $this->shellBinary($connection, $server) . " --info -instance-id {$escapedId} -format json 2>&1");
-        $parsed = json_decode($info['raw_output'], true);
+        $parsed = json_decode((string) ($info['clean_output'] ?: $info['raw_output']), true);
         $fullPath = $parsed['fullPath'] ?? null;
 
         if (!is_string($fullPath) || trim($fullPath) === '') {
@@ -1096,8 +1096,19 @@ PHP;
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $b64 = base64_encode($php);
         $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
-        $out = trim($this->execWithConnection($connection, $cmd));
-        return ['success' => true, 'stdout' => $out];
+        $result = $this->runCommandWithExitCode($connection, $cmd);
+        $out = trim((string) ($result['clean_output'] ?: $result['raw_output']));
+        $success = (int) ($result['exit_code'] ?? 1) === 0
+            && !$this->isCommandRefusalOutput($out);
+
+        return [
+            'success' => $success,
+            'stdout' => $out,
+            'exit_code' => (int) ($result['exit_code'] ?? 1),
+            'message' => $success
+                ? 'wp-cli eval executed.'
+                : 'wp-cli eval failed: ' . \Illuminate\Support\Str::limit($out !== '' ? $out : 'unknown error', 300),
+        ];
     }
 
     /**
@@ -1143,10 +1154,8 @@ PHP;
         }
 
         $stdout = trim((string) ($result['clean_output'] ?: $result['raw_output']));
-        $combined = strtolower($stdout);
         $success = (int) ($result['exit_code'] ?? 1) === 0
-            && !str_contains($combined, 'fatal error')
-            && !str_contains($combined, 'parse error');
+            && !$this->isCommandRefusalOutput($stdout);
 
         return [
             'success' => $success,
@@ -1226,6 +1235,8 @@ PHP;
             '    "large_url"=>(string)($sizes["large"]["url"] ?? ($sizes["medium"]["url"] ?? $full)),',
             '    "post_mime_type"=>(string)$post->post_mime_type, "mime_type"=>(string)$post->post_mime_type,',
             '    "date"=>(string)$post->post_date, "modified"=>(string)$post->post_modified,',
+            '    "google_drive_file_id"=>(string)get_post_meta($id,"_hexa_google_drive_file_id",true), "_hexa_google_drive_file_id"=>(string)get_post_meta($id,"_hexa_google_drive_file_id",true),',
+            '    "source_filename"=>(string)get_post_meta($id,"_hexa_source_filename",true), "_hexa_source_filename"=>(string)get_post_meta($id,"_hexa_source_filename",true),',
             '    "alt_text"=>(string)get_post_meta($id,"_wp_attachment_image_alt",true),',
             '    "caption"=>(string)$post->post_excerpt, "description"=>(string)$post->post_content,',
             '    "width"=>(int)($meta["width"] ?? 0), "height"=>(int)($meta["height"] ?? 0),',
@@ -1792,7 +1803,7 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
     // === localFilesystemCommand ===
 protected function localFilesystemCommand(SSH2|LocalShellConnection $connection, string $command): string
     {
-        if ($connection instanceof LocalShellConnection && $this->currentRuntimeUser() !== "root") {
+        if ($connection instanceof LocalShellConnection && $this->currentRuntimeUser() !== "root" && $this->localPrivilegeBridgeUsable()) {
             return "sudo -n /usr/local/bin/hexa-wp-local-fs " . escapeshellarg(base64_encode($command));
         }
 
