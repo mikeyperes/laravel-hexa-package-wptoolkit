@@ -514,7 +514,7 @@ trait ManagesWpCli
         return $this->shellBinary($connection, $server)
             . ' --wp-cli -instance-id '
             . escapeshellarg((string) $installId)
-            . ' --';
+            . ' -- --allow-root';
     }
 
     protected function resolveWpAuthorId(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId, string $author): ?string
