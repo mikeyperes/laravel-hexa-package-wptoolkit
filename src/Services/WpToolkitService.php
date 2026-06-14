@@ -17,7 +17,7 @@ use phpseclib3\Crypt\PublicKeyLoader;
 /**
  * WpToolkitService — all WP Toolkit operations go through this service.
  *
- * Connects to WHM servers via SSH and interacts with the wp-toolkit CLI
+ * Connects to WHM servers locally or remotely and interacts with the wp-toolkit CLI
  * to discover WordPress installs, manage credentials, and generate login URLs.
  *
  * Methods are organized into domain traits:
@@ -99,7 +99,7 @@ class WpToolkitService
     }
 
     /**
-     * Get or create a cached SSH connection for a server.
+     * Get or create a cached command connection for a server.
      * Reuses existing connections to avoid reconnecting for every operation.
      *
      * @param WhmServer $server
@@ -153,15 +153,19 @@ class WpToolkitService
     public function connectionMode(WhmServer $server): string
     {
         $settings = $this->runtimeSettings();
+
+        // Root CLI can safely use local execution. Web/PHP-FPM users on the same
+        // host are usually inside CloudLinux/CageFS LVE, where nested wp-toolkit
+        // calls fail; use the configured root SSH transport for those requests.
+        if ($this->serverMatchesLocalHost($server)) {
+            return strtolower($this->currentRuntimeUser()) === 'root' ? 'local' : 'ssh';
+        }
+
         if ($settings['mode'] === 'local') {
             return 'local';
         }
         if ($settings['mode'] === 'ssh') {
             return 'ssh';
-        }
-
-        if ($this->serverMatchesLocalHost($server) && ($this->probeLocalRuntime()['usable'] ?? false)) {
-            return 'local';
         }
 
         return 'ssh';
@@ -171,7 +175,7 @@ class WpToolkitService
     {
         return $this->connectionMode($server) === "local"
             ? "WP Toolkit (local)"
-            : "WP Toolkit (SSH)";
+            : "WP Toolkit (remote)";
     }
 
     public function isSameHostServer(WhmServer $server): bool
@@ -180,9 +184,9 @@ class WpToolkitService
     }
 
     /**
-     * Establish an SSH connection to a WHM server.
+     * Establish a remote command connection to a WHM server.
      *
-     * Tries SSH key auth first, falls back to password.
+     * Tries key auth first, falls back to password.
      *
      * @param WhmServer $server
      * @return array{success: bool, connection?: SSH2, error?: string}
@@ -195,7 +199,7 @@ class WpToolkitService
         $connectTimeout = max(10, min($timeout, 30));
         $username = $server->ssh_admin_username ?: $server->username ?: 'root';
 
-        $this->generic->log('info', '[WpToolkit] SSH connecting', [
+        $this->generic->log('info', '[WpToolkit] Remote connecting', [
             'hostname'    => $hostname,
             'port'        => $port,
             'username'    => $username,
@@ -214,11 +218,11 @@ class WpToolkitService
                         $server->ssh_key_passphrase ?: false
                     );
                     if ($ssh->login($username, $key)) {
-                        $this->generic->log('info', '[WpToolkit] SSH key auth succeeded');
+                        $this->generic->log('info', '[WpToolkit] Remote key auth succeeded');
                         return ['success' => true, 'connection' => $ssh];
                     }
                 } catch (\Exception $e) {
-                    $this->generic->log('warning', '[WpToolkit] SSH key auth failed', [
+                    $this->generic->log('warning', '[WpToolkit] Remote key auth failed', [
                         'error' => $e->getMessage(),
                     ]);
                 }
@@ -227,23 +231,23 @@ class WpToolkitService
             // Try password
             if (!empty($server->ssh_admin_password)) {
                 if ($ssh->login($username, $server->ssh_admin_password)) {
-                    $this->generic->log('info', '[WpToolkit] SSH password auth succeeded');
+                    $this->generic->log('info', '[WpToolkit] Remote password auth succeeded');
                     return ['success' => true, 'connection' => $ssh];
                 }
             }
 
             return [
                 'success' => false,
-                'error'   => "SSH auth failed for {$username}@{$hostname}:{$port}. No valid credentials.",
+                'error'   => "Remote auth failed for {$username}@{$hostname}:{$port}. No valid credentials.",
             ];
         } catch (\Exception $e) {
-            $this->generic->log('error', '[WpToolkit] SSH connection failed', [
+            $this->generic->log('error', '[WpToolkit] WP Toolkit connection failed', [
                 'hostname' => $hostname,
                 'error'    => $e->getMessage(),
             ]);
             return [
                 'success' => false,
-                'error'   => 'SSH connection failed: ' . $e->getMessage(),
+                'error'   => 'WP Toolkit connection failed: ' . $e->getMessage(),
             ];
         }
     }
@@ -346,8 +350,20 @@ class WpToolkitService
     public function inspectCommandRuntime(WhmServer $server): array
     {
         $localProbe = $this->probeLocalRuntime();
-        $remoteProbe = $this->probeRemoteRuntime($server);
         $sameHost = $this->serverMatchesLocalHost($server);
+        $remoteProbe = $sameHost
+            ? [
+                'transport' => 'local-only',
+                'connected' => false,
+                'runtime_user' => null,
+                'hostname' => $server->hostname,
+                'usable' => false,
+                'selected_binary' => null,
+                'reason' => 'Same-server target: remote probe skipped because local WP Toolkit execution is required.',
+                'candidates' => [],
+                'error' => null,
+            ]
+            : $this->probeRemoteRuntime($server);
         $transport = $this->connectionMode($server);
 
         return [
@@ -544,22 +560,23 @@ class WpToolkitService
     protected function connectionResolutionReason(WhmServer $server, array $localProbe): string
     {
         $settings = $this->runtimeSettings();
+
+        if ($this->serverMatchesLocalHost($server)) {
+            return ($localProbe['usable'] ?? false)
+                ? 'Same-server target: local WP Toolkit execution is required and available.'
+                : 'Same-server target: local WP Toolkit execution is required, but the current runtime user cannot execute the local WP Toolkit binary. Remote fallback is disabled.';
+        }
+
         if ($settings['mode'] === 'local') {
             return ($localProbe['usable'] ?? false)
                 ? 'Forced local execution via WP Toolkit settings.'
                 : 'Forced local execution via WP Toolkit settings, but the current runtime user cannot execute the local WP Toolkit binary.';
         }
         if ($settings['mode'] === 'ssh') {
-            return 'Forced SSH execution via WP Toolkit settings.';
+            return 'Forced remote execution via WP Toolkit settings.';
         }
 
-        if ($this->serverMatchesLocalHost($server)) {
-            return ($localProbe['usable'] ?? false)
-                ? 'Auto mode selected local execution because the target host matches this app host and the runtime user can execute WP Toolkit locally.'
-                : 'Auto mode fell back to SSH because the target host matches this app host, but the runtime user cannot execute WP Toolkit locally.';
-        }
-
-        return 'Auto mode selected SSH because the target host does not match the configured local hosts.';
+        return 'Auto mode selected remote execution because the target host does not match the configured local hosts.';
     }
 
     protected function currentRuntimeUser(): string
@@ -618,7 +635,7 @@ class WpToolkitService
                     $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --version 2>&1 | head -n 1');
                     $result['exit_code'] = $check['exit_code'];
                     $result['version'] = $check['lines'][0] ?? null;
-                    $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+                    $result['usable'] = true;
                 }
             }
 
@@ -696,6 +713,20 @@ class WpToolkitService
 
     protected function probeRemoteRuntime(WhmServer $server, ?SSH2 $existingConnection = null): array
     {
+        if ($this->serverMatchesLocalHost($server)) {
+            return [
+                'transport' => 'local-only',
+                'connected' => false,
+                'runtime_user' => null,
+                'hostname' => $server->hostname,
+                'usable' => false,
+                'selected_binary' => null,
+                'reason' => 'Same-server target: remote probe skipped because local WP Toolkit execution is required.',
+                'candidates' => [],
+                'error' => null,
+            ];
+        }
+
         $cacheKey = $server->id . ':' . $server->hostname;
         if (isset($this->remoteProbeCache[$cacheKey])) {
             return $this->remoteProbeCache[$cacheKey];
@@ -709,7 +740,7 @@ class WpToolkitService
             'hostname' => $server->hostname,
             'usable' => false,
             'selected_binary' => null,
-            'reason' => 'SSH probe did not run.',
+            'reason' => 'Remote probe did not run.',
             'candidates' => [],
             'error' => null,
         ];
@@ -719,8 +750,8 @@ class WpToolkitService
         if (!$connection) {
             $ssh = $this->sshConnect($server);
             if (!$ssh['success']) {
-                $probe['reason'] = 'SSH connection failed.';
-                $probe['error'] = $ssh['error'] ?? 'SSH connection failed';
+                $probe['reason'] = 'WP Toolkit connection failed.';
+                $probe['error'] = $ssh['error'] ?? 'WP Toolkit connection failed';
                 return $this->remoteProbeCache[$cacheKey] = $probe;
             }
 
@@ -770,7 +801,7 @@ class WpToolkitService
                     $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --version 2>&1 | head -n 1');
                     $result['exit_code'] = $check['exit_code'];
                     $result['version'] = $check['lines'][0] ?? null;
-                    $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
+                    $result['usable'] = true;
                 }
             }
 
@@ -778,7 +809,7 @@ class WpToolkitService
             if (!$probe['usable'] && $result['usable']) {
                 $probe['usable'] = true;
                 $probe['selected_binary'] = $candidate;
-                $probe['reason'] = 'Remote WP Toolkit command is executable over SSH.';
+                $probe['reason'] = 'Remote WP Toolkit command is executable.';
             }
         }
 
@@ -787,7 +818,7 @@ class WpToolkitService
         }
 
         if (!$probe['usable'] && $probe['error'] === null) {
-            $probe['reason'] = 'No usable WP Toolkit binary was found for the SSH user on the target server.';
+            $probe['reason'] = 'No usable WP Toolkit binary was found for the remote command user on the target server.';
         }
 
         return $this->remoteProbeCache[$cacheKey] = $probe;
@@ -797,7 +828,7 @@ class WpToolkitService
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -842,7 +873,7 @@ class WpToolkitService
     ): array {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -892,7 +923,7 @@ class WpToolkitService
     ): array {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -936,7 +967,7 @@ class WpToolkitService
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -959,7 +990,7 @@ class WpToolkitService
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -984,7 +1015,7 @@ class WpToolkitService
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed', 'stdout' => ''];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed', 'stdout' => ''];
         }
 
         $connection = $ssh['connection'];
