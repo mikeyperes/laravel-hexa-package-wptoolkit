@@ -4,6 +4,8 @@ namespace Tests\Unit;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
+use hexa_package_wptoolkit\Support\LocalShellConnection;
+use phpseclib3\Net\SSH2;
 use PHPUnit\Framework\TestCase;
 
 class WpCliCommandEscapingTest extends TestCase
@@ -67,7 +69,7 @@ class WpCliHarness
 
     protected function getConnection($server): array
     {
-        return ['success' => true, 'connection' => (object) []];
+        return ['success' => true, 'connection' => new LocalShellConnection()];
     }
 
     protected function shellBinary($connection, $server): string
@@ -75,9 +77,23 @@ class WpCliHarness
         return '/usr/local/bin/wp-toolkit';
     }
 
+    protected function wpCliBaseCommand(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): string
+    {
+        return '/usr/local/bin/wp-toolkit --wp-cli -instance-id ' . escapeshellarg((string) $installId) . ' --';
+    }
+
+    protected function isCommandRefusalOutput(string $output): bool
+    {
+        return false;
+    }
+
     protected function execWithConnection($connection, string $command): string
     {
         $this->commands[] = $command;
+
+        if (str_contains($command, '__HEXA_CMD_EXIT__')) {
+            return "Success: ok\n__HEXA_CMD_EXIT__:0";
+        }
 
         if (str_contains($command, '-- post create')) {
             return '321';
