@@ -13,7 +13,7 @@ return [
     | Version
     |--------------------------------------------------------------------------
     */
-    'version' => '3.0.42',
+    'version' => '3.0.43',
 
     /*
     |--------------------------------------------------------------------------
@@ -40,6 +40,7 @@ return [
     'execution' => [
         'mode' => env('WPTOOLKIT_EXECUTION_MODE', 'auto'),
         'force_local_in_production' => (bool) env('WPTOOLKIT_FORCE_LOCAL_IN_PRODUCTION', false),
+        'require_privilege_bridge' => (bool) env('WPTOOLKIT_REQUIRE_PRIVILEGE_BRIDGE', true),
         'local_hosts' => array_values(array_filter(array_map(
             static fn ($host) => trim((string) $host),
             explode(',', (string) env('WPTOOLKIT_LOCAL_HOSTS', ''))

@@ -337,6 +337,10 @@ class WpToolkitService
                 'wptoolkit_force_local_in_production',
                 config('wptoolkit.execution.force_local_in_production', false)
             )),
+            'require_privilege_bridge' => $this->truthy($this->settingValue(
+                'wptoolkit_require_privilege_bridge',
+                config('wptoolkit.execution.require_privilege_bridge', true)
+            )),
             'local_hosts' => array_values(array_filter(array_map(
                 static fn ($host) => strtolower(trim((string) $host)),
                 explode(',', $localHostsRaw)
@@ -716,8 +720,14 @@ class WpToolkitService
             }
         }
 
+        $probe['privilege_bridge_required'] = (bool) ($settings['require_privilege_bridge'] ?? true);
         $probe['privilege_bridge_usable'] = $this->localPrivilegeBridgeUsable();
-        if (($probe['usable'] ?? false) && $probe['runtime_user'] !== 'root' && !($probe['privilege_bridge_usable'] ?? false)) {
+        if (
+            ($probe['usable'] ?? false)
+            && $probe['runtime_user'] !== 'root'
+            && ($probe['privilege_bridge_required'] ?? true)
+            && !($probe['privilege_bridge_usable'] ?? false)
+        ) {
             $probe['usable'] = false;
             $probe['reason'] = 'Local WP Toolkit binary exists, but the same-host privilege bridge is unavailable. Falling back to SSH to avoid broken local file operations.';
         }
