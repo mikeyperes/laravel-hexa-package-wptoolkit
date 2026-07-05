@@ -167,6 +167,14 @@ class WpToolkitService
             return 'ssh';
         }
 
+        if (
+            ($settings['force_local_in_production'] ?? false)
+            && app()->environment('production')
+            && ($localProbe['usable'] ?? false)
+        ) {
+            return 'local';
+        }
+
         return 'ssh';
     }
 
@@ -325,6 +333,10 @@ class WpToolkitService
 
         return [
             'mode' => $mode,
+            'force_local_in_production' => $this->truthy($this->settingValue(
+                'wptoolkit_force_local_in_production',
+                config('wptoolkit.execution.force_local_in_production', false)
+            )),
             'local_hosts' => array_values(array_filter(array_map(
                 static fn ($host) => strtolower(trim((string) $host)),
                 explode(',', $localHostsRaw)
@@ -389,6 +401,19 @@ class WpToolkitService
     {
         $value = trim((string) $value);
         return $value !== '' ? $value : null;
+    }
+
+    protected function truthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
     }
 
     protected function candidatePaths(string $transport): array
@@ -558,6 +583,12 @@ class WpToolkitService
             }
 
             return 'Forced SSH execution via WP Toolkit settings.';
+        }
+
+        if (($settings['force_local_in_production'] ?? false) && app()->environment('production')) {
+            return ($localProbe['usable'] ?? false)
+                ? 'Auto mode selected local execution because production local execution is enabled and the runtime user can execute WP Toolkit locally.'
+                : 'Auto mode fell back to SSH because production local execution is enabled, but the current runtime user cannot execute WP Toolkit locally.';
         }
 
         if ($this->serverMatchesLocalHost($server)) {
