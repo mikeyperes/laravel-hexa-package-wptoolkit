@@ -1087,7 +1087,7 @@ PHP;
         ];
     }
 
-    public function wpCliEval(\hexa_package_whm\Models\WhmServer $server, int $installId, string $php): array
+    public function wpCliEval(\hexa_package_whm\Models\WhmServer $server, int $installId, string $php, ?int $timeout = null): array
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
@@ -1098,7 +1098,19 @@ PHP;
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $b64 = base64_encode($php);
         $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
-        $result = $this->runCommandWithExitCode($connection, $cmd);
+        $previousTimeout = $this->commandTimeoutSeconds();
+        if ($timeout !== null && method_exists($connection, 'setTimeout')) {
+            $connection->setTimeout(max(10, $timeout));
+        }
+
+        try {
+            $result = $this->runCommandWithExitCode($connection, $cmd);
+        } finally {
+            if ($timeout !== null && method_exists($connection, 'setTimeout')) {
+                $connection->setTimeout($previousTimeout);
+            }
+        }
+
         $out = trim((string) ($result['clean_output'] ?: $result['raw_output']));
         $success = (int) ($result['exit_code'] ?? 1) === 0
             && !$this->isCommandRefusalOutput($out);
