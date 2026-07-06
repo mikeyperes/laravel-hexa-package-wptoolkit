@@ -13,7 +13,7 @@ use phpseclib3\Net\SSH2;
 trait ManagesWpCli
 {
     /**
-     * Create a WordPress post via wp-cli SSH.
+     * Create a WordPress post via WP Toolkit wp-cli.
      *
      * @param WhmServer $server
      * @param int       $installId  WP Toolkit install ID
@@ -29,87 +29,123 @@ trait ManagesWpCli
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        $tmpDirectory = $installPath ? rtrim($installPath, '/') : '/tmp';
 
-        // Write content to temp file on server (avoids shell escaping issues with HTML)
-        $tmpFile = '/tmp/hexa_wp_post_' . uniqid() . '.html';
-        $this->execWithConnection($connection, 'cat > ' . escapeshellarg($tmpFile) . ' << \'HEXAEOF\'' . "\n" . $content . "\nHEXAEOF");
+        $tmpFiles = [];
+        $tmpFile = $tmpDirectory . '/.hexa_wp_post_' . uniqid('', true) . '.html';
+        $tmpFiles[] = $tmpFile;
+        $output = '';
 
-        // Build wp post create command
-        $cmd = "{$wpCliBase} post create"
-            . " --post_title=" . escapeshellarg($title)
-            . " --post_status=" . escapeshellarg($status)
-            . " --post_type=" . escapeshellarg($postType)
-            . " --post_content=\"$(cat " . escapeshellarg($tmpFile) . ")\""
-            . " --porcelain";
+        try {
+            $stageError = $this->stageWpCliTempFile($connection, $tmpFile, $content);
+            if ($stageError !== null) {
+                return ['success' => false, 'message' => 'Failed to stage post content for wp-cli: ' . $stageError];
+            }
 
-        if (!empty($categoryIds)) {
-            $cmd .= " --post_category=" . escapeshellarg(implode(',', $categoryIds));
-        }
-        // Tags set after post creation via wp_set_post_tags (--tags_input expects names, not IDs)
-        if ($date && $status === 'future') {
-            $cmd .= " --post_date=" . escapeshellarg($date);
-        }
-        if ($author) {
-            $wpUserId = $this->resolveWpAuthorId($server, $connection, $installId, (string) $author);
-            if ($wpUserId !== null) {
-                $cmd .= " --post_author=" . escapeshellarg($wpUserId);
-                if (!is_numeric((string) $author)) {
-                    $this->generic->log('info', '[WpToolkit] Resolved author', ['username' => $author, 'wp_id' => $wpUserId]);
+            $cmd = $wpCliBase . ' post create ' . escapeshellarg($tmpFile)
+                . ' --post_title=' . escapeshellarg($title)
+                . ' --post_status=' . escapeshellarg($status)
+                . ' --post_type=' . escapeshellarg($postType)
+                . ' --porcelain';
+
+            if (!empty($categoryIds)) {
+                $cmd .= ' --post_category=' . escapeshellarg(implode(',', $categoryIds));
+            }
+            if ($date && $status === 'future') {
+                $cmd .= ' --post_date=' . escapeshellarg($date);
+            }
+            if ($author) {
+                $wpUserId = $this->resolveWpAuthorId($server, $connection, $installId, (string) $author);
+                if ($wpUserId !== null) {
+                    $cmd .= ' --post_author=' . escapeshellarg($wpUserId);
+                    if (!is_numeric((string) $author)) {
+                        $this->generic->log('info', '[WpToolkit] Resolved author', ['username' => $author, 'wp_id' => $wpUserId]);
+                    }
+                } elseif (!is_numeric((string) $author)) {
+                    $this->generic->log('warning', '[WpToolkit] Author not found on WP', ['username' => $author]);
                 }
-            } elseif (!is_numeric((string) $author)) {
-                $this->generic->log('warning', '[WpToolkit] Author not found on WP', ['username' => $author]);
+            }
+
+            $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status, 'author' => $author]);
+            $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        } finally {
+            foreach ($tmpFiles as $file) {
+                $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($file));
             }
         }
 
-        $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status, 'author' => $author]);
+        $postId = null;
+        $blockingLines = [];
+        $insidePhpDiagnostic = false;
+        foreach (preg_split('/\R/', $output) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            if (is_numeric($line)) {
+                $postId = (int) $line;
+                $insidePhpDiagnostic = false;
+                continue;
+            }
+            if (str_starts_with($line, 'Deprecated:') || str_starts_with($line, 'Warning:') || str_starts_with($line, 'Notice:') || str_starts_with($line, 'PHP ') || str_starts_with($line, 'PHP:')) {
+                $insidePhpDiagnostic = true;
+                continue;
+            }
+            if ($insidePhpDiagnostic && ($line === "array (" || str_starts_with($line, '\'') || str_starts_with($line, "#") || $line === ")" || $line === ")]") ) {
+                continue;
+            }
+            $insidePhpDiagnostic = false;
+            $blockingLines[] = $line;
+        }
 
-        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
-
-        // Cleanup temp file
-        $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpFile));
-
-        // --porcelain returns just the post ID
-        if (is_numeric($output)) {
-            $postId = (int) $output;
-
-            // Set tags via wp_set_post_tags (IDs, not names)
+        if ($postId !== null && empty($blockingLines)) {
             if (!empty($tagIds)) {
                 $tagIdsStr = implode(',', array_map('intval', $tagIds));
-                $tagPhp = base64_encode('wp_set_post_tags(' . $postId . ', [' . $tagIdsStr . ']); echo "TAGS_SET";');
-                $tagCmd = "CODE=\$(echo '{$tagPhp}' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
+                $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . $tagIdsStr . ']);';
+                $tagTmpFile = $tmpDirectory . '/.hexa_wp_tags_' . uniqid('', true) . '.php';
+                $tmpFiles[] = $tagTmpFile;
+                $this->stageWpCliTempFile($connection, $tagTmpFile, $tagPhp);
+                $tagCmd = $wpCliBase . ' eval-file ' . escapeshellarg($tagTmpFile) . ' 2>&1';
                 $this->execWithConnection($connection, $tagCmd);
+                $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tagTmpFile));
                 $this->generic->log('info', '[WpToolkit] Tags set via wp_set_post_tags', ['post_id' => $postId, 'tag_ids' => $tagIds]);
             }
 
-            // Set featured image if provided
             if ($featuredMediaId) {
-                $metaCmd = "{$wpCliBase} post meta update {$postId} _thumbnail_id {$featuredMediaId} 2>&1";
+                $metaCmd = $wpCliBase . ' post meta update ' . escapeshellarg((string) $postId) . ' _thumbnail_id ' . escapeshellarg((string) $featuredMediaId) . ' 2>&1';
                 $this->execWithConnection($connection, $metaCmd);
                 $this->generic->log('info', '[WpToolkit] Featured image set', ['post_id' => $postId, 'media_id' => $featuredMediaId]);
             }
 
-            // Get permalink
-            $urlCmd = "{$wpCliBase} post get {$postId} --field=url 2>&1";
+            $urlCmd = $wpCliBase . ' post get ' . escapeshellarg((string) $postId) . ' --field=url 2>&1';
             $postUrl = trim($this->execWithConnection($connection, $urlCmd));
-            if (!str_starts_with($postUrl, 'http')) $postUrl = null;
+            if (!str_starts_with($postUrl, 'http')) {
+                $postUrl = null;
+            }
 
             $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId, 'url' => $postUrl]);
             return [
                 'success' => true,
-                'message' => "Post created (ID: {$postId})",
+                'message' => 'Post created (ID: ' . $postId . ')',
                 'data'    => ['post_id' => $postId, 'post_url' => $postUrl],
             ];
         }
 
-        $this->generic->log('error', '[WpToolkit] wpCliCreatePost failed', ['output' => $output]);
-        return ['success' => false, 'message' => 'wp-cli post create failed: ' . \Illuminate\Support\Str::limit($output, 300)];
-    }
+        if ($postId !== null) {
+            $this->execWithConnection($connection, $wpCliBase . ' post delete ' . escapeshellarg((string) $postId) . ' --force 2>&1');
+            $this->generic->log('error', '[WpToolkit] wpCliCreatePost produced post id with blocking output', ['post_id' => $postId, 'blocking_lines' => $blockingLines]);
+        }
 
+        $errorOutput = !empty($blockingLines) ? implode(PHP_EOL, $blockingLines) : $output;
+        $this->generic->log('error', '[WpToolkit] wpCliCreatePost failed', ['output' => $output, 'blocking_lines' => $blockingLines]);
+        return ['success' => false, 'message' => 'wp-cli post create failed: ' . \Illuminate\Support\Str::limit($errorOutput, 300)];
+    }
     /**
      * Update an existing WordPress post via wp-cli.
      *
@@ -123,23 +159,32 @@ trait ManagesWpCli
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        $tmpDirectory = $installPath ? rtrim($installPath, '/') : '/tmp';
 
         $tmpFiles = [];
         $tmpFile = null;
         if (array_key_exists('content', $postData)) {
-            $tmpFile = '/tmp/hexa_wp_post_' . uniqid('', true) . '.html';
+            $tmpFile = $tmpDirectory . '/.hexa_wp_post_' . uniqid('', true) . '.html';
             $tmpFiles[] = $tmpFile;
-            $contentBase64 = base64_encode((string) ($postData['content'] ?? ''));
-            $writeCmd = 'printf %s ' . escapeshellarg($contentBase64) . ' | base64 -d > ' . escapeshellarg($tmpFile);
-            $this->execWithConnection($connection, $writeCmd);
+            $stageError = $this->stageWpCliTempFile($connection, $tmpFile, (string) ($postData['content'] ?? ''));
+            if ($stageError !== null) {
+                foreach ($tmpFiles as $file) {
+                    $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($file));
+                }
+                return ['success' => false, 'message' => 'Failed to stage post content for wp-cli: ' . $stageError];
+            }
         }
 
         $cmd = "{$wpCliBase} post update " . escapeshellarg((string) $postId);
+        if ($tmpFile) {
+            $cmd .= ' ' . escapeshellarg($tmpFile);
+        }
         if (array_key_exists('title', $postData)) {
             $cmd .= ' --post_title=' . escapeshellarg((string) $postData['title']);
         }
@@ -148,9 +193,6 @@ trait ManagesWpCli
         }
         if (array_key_exists('excerpt', $postData)) {
             $cmd .= ' --post_excerpt=' . escapeshellarg((string) ($postData['excerpt'] ?? ''));
-        }
-        if ($tmpFile) {
-            $cmd .= ' --post_content="$(cat ' . escapeshellarg($tmpFile) . ')"';
         }
         if (!empty($postData['categories'])) {
             $cmd .= ' --post_category=' . escapeshellarg(implode(',', array_map('intval', $postData['categories'])));
@@ -173,10 +215,9 @@ trait ManagesWpCli
                 if (array_key_exists('tags', $postData) && is_array($postData['tags'])) {
                     $tagIds = array_values(array_filter(array_map('intval', $postData['tags'])));
                     $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . implode(',', $tagIds) . ']);';
-                    $tagTmpFile = '/tmp/hexa_wp_tags_' . uniqid('', true) . '.php';
+                    $tagTmpFile = $tmpDirectory . '/.hexa_wp_tags_' . uniqid('', true) . '.php';
                     $tmpFiles[] = $tagTmpFile;
-                    $tagWriteCmd = 'printf %s ' . escapeshellarg(base64_encode($tagPhp)) . ' | base64 -d > ' . escapeshellarg($tagTmpFile);
-                    $this->execWithConnection($connection, $tagWriteCmd);
+                    $this->stageWpCliTempFile($connection, $tagTmpFile, $tagPhp);
                     $tagCmd = "{$wpCliBase} eval-file " . escapeshellarg($tagTmpFile) . ' 2>&1';
                     $this->execWithConnection($connection, $tagCmd);
                 }
@@ -228,18 +269,31 @@ trait ManagesWpCli
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $cmd = "{$wpCliBase} post get " . escapeshellarg((string) $postId) . ' --format=json 2>&1';
         $output = trim($this->execWithConnection($connection, $cmd));
-        $json = json_decode($output, true);
+        $jsonPayload = $output;
+        $jsonStart = strpos($output, '{');
+        $jsonEnd = strrpos($output, '}');
+        if ($jsonStart !== false && $jsonEnd !== false && $jsonEnd >= $jsonStart) {
+            $jsonPayload = substr($output, $jsonStart, $jsonEnd - $jsonStart + 1);
+        }
+        $json = json_decode($jsonPayload, true);
 
         if (!is_array($json) || empty($json['ID'])) {
             $this->generic->log('error', '[WpToolkit] wpCliGetPost failed', ['output' => $output, 'post_id' => $postId]);
             return ['success' => false, 'message' => 'wp-cli post get failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+        }
+
+        $authorId = isset($json["post_author"]) ? (int) $json["post_author"] : null;
+        $authorName = "";
+        if ($authorId) {
+            $authorCmd = $wpCliBase . " user get " . escapeshellarg((string) $authorId) . " --field=display_name 2>/dev/null";
+            $authorName = trim($this->execWithConnection($connection, $authorCmd));
         }
 
         return [
@@ -251,12 +305,15 @@ trait ManagesWpCli
                 'post_status' => $json['post_status'] ?? null,
                 'post_title' => $json['post_title'] ?? '',
                 'post_date' => $json['post_date'] ?? null,
+                "author_id" => $authorId,
+                "author_name" => $authorName,
+                "post_content" => (string) ($json["post_content"] ?? ""),
             ],
         ];
     }
 
     /**
-     * Upload media to WordPress via wp-cli SSH (downloads URL to server, imports it).
+     * Upload media to WordPress via WP Toolkit wp-cli (downloads URL to server, imports it).
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -266,7 +323,7 @@ trait ManagesWpCli
      * @return array{success: bool, message: string, data?: array}
      */
     /**
-     * Upload media to WordPress via wp-cli SSH with full SEO metadata.
+     * Upload media to WordPress via WP Toolkit wp-cli with full SEO metadata.
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -283,7 +340,7 @@ trait ManagesWpCli
 
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -295,20 +352,49 @@ trait ManagesWpCli
 
         // Download inside the WordPress install path so wp-toolkit/wp-cli can actually see the file.
         $parsedPath = parse_url($imageUrl, PHP_URL_PATH) ?: '';
-        $ext = pathinfo($parsedPath, PATHINFO_EXTENSION) ?: 'jpg';
-        $ext = preg_replace('/[^a-zA-Z0-9].*/', '', $ext);
-        if (!in_array(strtolower($ext), ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'avif'])) $ext = 'jpg';
+        $allowedExt = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'avif'];
+        $ext = strtolower((string) (pathinfo($parsedPath, PATHINFO_EXTENSION) ?: 'jpg'));
+        $ext = preg_replace('/[^a-zA-Z0-9].*/', '', $ext) ?: 'jpg';
+        if ($ext === 'jpeg') $ext = 'jpg';
+        if (!in_array($ext, $allowedExt, true)) $ext = 'jpg';
+
         $targetFilename = $filename ?: ('hexa-upload-' . uniqid() . '.' . $ext);
-        if (!preg_match('/\.\w{2,5}$/', $targetFilename)) $targetFilename .= '.' . $ext;
+        $targetExt = strtolower((string) pathinfo($targetFilename, PATHINFO_EXTENSION));
+        $targetExt = preg_replace('/[^a-zA-Z0-9].*/', '', $targetExt) ?: '';
+        if ($targetExt === 'jpeg') $targetExt = 'jpg';
+        if ($targetExt === '' || !in_array($targetExt, $allowedExt, true)) {
+            $targetBase = pathinfo($targetFilename, PATHINFO_FILENAME) ?: ('hexa-upload-' . uniqid());
+            $targetFilename = $targetBase . '.' . $ext;
+        }
+        $targetFilename = preg_replace('/[^A-Za-z0-9._-]+/', '-', $targetFilename) ?: ('hexa-upload-' . uniqid() . '.' . $ext);
+        if ($connection instanceof LocalShellConnection && filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+            $directImport = $this->wpDirectMediaSideload($connection, $installId, $imageUrl, $targetFilename, $altText, $caption, $description);
+            if (($directImport["success"] ?? false) === true) {
+                return $directImport;
+            }
+            $this->generic->log("warning", "[WpToolkit] Direct media sideload failed; falling back to media import", [
+                "message" => (string) ($directImport["message"] ?? "unknown error"),
+                "url" => $imageUrl,
+                "filename" => $targetFilename,
+            ]);
+        }
         $tmpDir = rtrim($installPath, '/') . '/.hexa-import-' . uniqid();
         $tmpFile = $tmpDir . '/' . $targetFilename;
+        $useDirectUrlImport = $connection instanceof LocalShellConnection && filter_var($imageUrl, FILTER_VALIDATE_URL);
+        $importSource = $useDirectUrlImport ? $imageUrl : $tmpFile;
+        if (!$useDirectUrlImport) {
         $this->execWithConnection($connection, "mkdir -p " . escapeshellarg($tmpDir));
-        $curlCmd = "curl -fsSL --compressed --connect-timeout 8 --max-time 25 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0' -o "
-            . escapeshellarg($tmpFile)
-            . " "
-            . escapeshellarg($imageUrl)
-            . " && chmod 644 "
-            . escapeshellarg($tmpFile)
+        $referer = '';
+        $urlHost = parse_url($imageUrl, PHP_URL_HOST);
+        if ($urlHost) {
+            $referer = (parse_url($imageUrl, PHP_URL_SCHEME) ?: 'https') . '://' . $urlHost . '/';
+        }
+        $curlCmd = "curl -fL --compressed --retry 1 --connect-timeout 8 --max-time 35 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0'"
+            . " -H " . escapeshellarg('Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8')
+            . ($referer ? " -e " . escapeshellarg($referer) : '')
+            . " -o " . escapeshellarg($tmpFile)
+            . " " . escapeshellarg($imageUrl)
+            . " && chmod 644 " . escapeshellarg($tmpFile)
             . " 2>/dev/null";
         $this->execWithConnection($connection, $curlCmd);
         $fileSize = trim($this->execWithConnection($connection, "stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0"));
@@ -322,14 +408,15 @@ trait ManagesWpCli
             return ['success' => false, 'message' => 'Failed to download image from: ' . \Illuminate\Support\Str::limit($imageUrl, 100)];
         }
         $this->generic->log('info', '[WpToolkit] Image downloaded', ['url' => \Illuminate\Support\Str::limit($imageUrl, 100), 'size' => $fileSize, 'filename' => $targetFilename]);
+        }
 
-        $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
-        $fileNameArg = $filename ? " --file_name=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : '';
+        $titleArg = $targetFilename ? " --title=" . escapeshellarg(pathinfo($targetFilename, PATHINFO_FILENAME)) : '';
+        $fileNameArg = $targetFilename ? " --file_name=" . escapeshellarg(pathinfo($targetFilename, PATHINFO_FILENAME)) : '';
         $altArg = $altText ? " --alt=" . escapeshellarg($altText) : '';
         $captionArg = $caption ? " --caption=" . escapeshellarg($caption) : '';
         $descriptionArg = $description ? " --desc=" . escapeshellarg($description) : '';
         $cmd = "{$wpCliBase} media import "
-            . escapeshellarg($tmpFile)
+            . escapeshellarg($importSource)
             . $fileNameArg
             . $titleArg
             . $captionArg
@@ -337,7 +424,9 @@ trait ManagesWpCli
             . $descriptionArg
             . " --porcelain 2>&1";
         $import = $this->runCommandWithExitCode($connection, $cmd);
-        $this->execWithConnection($connection, "rm -rf " . escapeshellarg($tmpDir));
+        if (!$useDirectUrlImport) {
+            $this->execWithConnection($connection, "rm -rf " . escapeshellarg($tmpDir));
+        }
 
         $output = '';
         foreach ($import['lines'] as $line) {
@@ -397,7 +486,7 @@ trait ManagesWpCli
                     'media_url' => $mediaUrl,
                     'sizes' => $sizes,
                     'source_url' => $imageUrl,
-                    'filename' => $filename,
+                    'filename' => $targetFilename,
                     'file_path' => $filePath,
                     'file_size' => $fileSize,
                     'alt_text' => $altText,
@@ -416,6 +505,71 @@ trait ManagesWpCli
             'tmp_file' => $tmpFile,
         ]);
         return ['success' => false, 'message' => 'wp-cli media import failed: ' . \Illuminate\Support\Str::limit($cleanOutput ?: 'unknown error', 300)];
+    }
+
+    private function wpDirectMediaSideload(LocalShellConnection $connection, int $installId, string $imageUrl, string $targetFilename, string $altText = "", string $caption = "", string $description = ""): array
+    {
+        $wrapper = base_path("storage/app/server-tools/hexa-wp-direct-media-local.sh");
+        if (!is_file($wrapper) || !is_executable($wrapper)) {
+            return ["success" => false, "message" => "Direct media sideload helper is not installed or executable."];
+        }
+
+        $cmd = escapeshellarg($wrapper)
+            . " --instance-id=" . escapeshellarg((string) $installId)
+            . " --url=" . escapeshellarg($imageUrl)
+            . " --filename=" . escapeshellarg($targetFilename)
+            . " --alt=" . escapeshellarg($altText)
+            . " --caption=" . escapeshellarg($caption)
+            . " --description=" . escapeshellarg($description)
+            . " 2>&1";
+
+        $result = $this->runCommandWithExitCode($connection, $cmd);
+        $rawOutput = (string) ($result["raw_output"] ?? implode("\n", (array) ($result["lines"] ?? [])));
+        $payload = null;
+        foreach (explode("\n", $rawOutput) as $line) {
+            if (str_contains($line, "HEXA_MEDIA_IMPORT:")) {
+                $json = substr($line, strpos($line, "HEXA_MEDIA_IMPORT:") + 18);
+                $decoded = json_decode(trim($json), true);
+                if (is_array($decoded)) {
+                    $payload = $decoded;
+                    break;
+                }
+            }
+        }
+
+        if (!is_array($payload)) {
+            return ["success" => false, "message" => "Direct media sideload did not return a parseable response: " . \Illuminate\Support\Str::limit(trim($rawOutput) ?: "empty output", 300)];
+        }
+
+        if (($payload["success"] ?? false) !== true) {
+            return ["success" => false, "message" => (string) ($payload["message"] ?? "Direct media sideload failed.")];
+        }
+
+        $mediaId = (int) ($payload["media_id"] ?? 0);
+        $mediaUrl = (string) ($payload["media_url"] ?? "");
+        if ($mediaId <= 0 || $mediaUrl === "") {
+            return ["success" => false, "message" => "Direct media sideload returned incomplete media data."];
+        }
+
+        $sizes = is_array($payload["sizes"] ?? null) ? $payload["sizes"] : ["full" => $mediaUrl];
+        $this->generic->log("info", "[WpToolkit] Media sideloaded directly", ["media_id" => $mediaId, "url" => $mediaUrl, "sizes" => count($sizes)]);
+
+        return [
+            "success" => true,
+            "message" => "Media uploaded (ID: {$mediaId})",
+            "data" => [
+                "media_id" => $mediaId,
+                "media_url" => $mediaUrl,
+                "sizes" => $sizes,
+                "source_url" => $imageUrl,
+                "filename" => (string) ($payload["filename"] ?? $targetFilename),
+                "file_path" => (string) ($payload["file_path"] ?? ""),
+                "file_size" => (int) ($payload["file_size"] ?? 0),
+                "alt_text" => $altText,
+                "caption" => $caption,
+                "description" => $description,
+            ],
+        ];
     }
 
     protected function wpCliBaseCommand(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): string
@@ -503,6 +657,46 @@ trait ManagesWpCli
         return rtrim($fullPath, '/');
     }
 
+    protected function stageWpCliTempFile(SSH2|LocalShellConnection $connection, string $path, string $contents): ?string
+    {
+        try {
+            if ($connection instanceof LocalShellConnection) {
+                $bytes = @file_put_contents($path, $contents);
+                if ($bytes === false) {
+                    $error = error_get_last();
+                    return (string) ($error['message'] ?? 'local file write failed');
+                }
+
+                return null;
+            }
+
+            if (method_exists($connection, 'put')) {
+                return $connection->put($path, $contents) ? null : 'WP Toolkit temp file write failed';
+            }
+
+            $tmpBase64 = $path . '.b64';
+            $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpBase64) . ' ' . escapeshellarg($path));
+            $encoded = base64_encode($contents);
+            foreach (str_split($encoded, 24000) as $chunk) {
+                $appendCmd = 'printf %s ' . escapeshellarg($chunk) . ' >> ' . escapeshellarg($tmpBase64);
+                $chunkResult = $this->runCommandWithExitCode($connection, $appendCmd . ' 2>&1');
+                if (((int) ($chunkResult['exit_code'] ?? 1)) !== 0) {
+                    return 'chunked temp write failed: ' . \Illuminate\Support\Str::limit($chunkResult['clean_output'] ?: $chunkResult['raw_output'], 300);
+                }
+            }
+
+            $decodeCmd = 'base64 -d ' . escapeshellarg($tmpBase64) . ' > ' . escapeshellarg($path);
+            $decodeResult = $this->runCommandWithExitCode($connection, $decodeCmd . ' 2>&1');
+            $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpBase64));
+            if (((int) ($decodeResult['exit_code'] ?? 1)) !== 0) {
+                return 'temp decode failed: ' . \Illuminate\Support\Str::limit($decodeResult['clean_output'] ?: $decodeResult['raw_output'], 300);
+            }
+
+            return null;
+        } catch (\Throwable $e) {
+            return $e->getMessage();
+        }
+    }
     protected function execWithConnection(SSH2|LocalShellConnection $connection, string $cmd): string
     {
         if (method_exists($connection, 'setTimeout')) {
@@ -522,12 +716,12 @@ trait ManagesWpCli
         if ($connection instanceof SSH2 && $connection->isTimeout()) {
             $timeout = $this->commandTimeoutSeconds();
             $this->disconnectCachedConnection(connection: $connection);
-            $this->generic->log('error', '[WpToolkit] SSH command timed out', [
+            $this->generic->log('error', '[WpToolkit] command timed out', [
                 'timeout' => $timeout,
                 'command' => \Illuminate\Support\Str::limit($cmd, 160),
             ]);
 
-            throw new \RuntimeException("WP Toolkit SSH command timed out after {$timeout} seconds");
+            throw new \RuntimeException("WP Toolkit command timed out after {$timeout} seconds");
         }
 
         return $output;
@@ -569,7 +763,7 @@ trait ManagesWpCli
     }
 
     /**
-     * Create or get a WordPress category via wp-cli SSH.
+     * Create or get a WordPress category via WP Toolkit wp-cli.
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -580,7 +774,7 @@ trait ManagesWpCli
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -607,7 +801,7 @@ trait ManagesWpCli
     }
 
     /**
-     * Create or get a WordPress tag via wp-cli SSH.
+     * Create or get a WordPress tag via WP Toolkit wp-cli.
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -618,7 +812,7 @@ trait ManagesWpCli
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -645,7 +839,7 @@ trait ManagesWpCli
     }
 
     /**
-     * Test write permissions on a WordPress install via wp-cli SSH.
+     * Test write permissions on a WordPress install via WP Toolkit wp-cli.
      * Creates and immediately deletes a test post.
      *
      * @param WhmServer $server
@@ -656,7 +850,7 @@ trait ManagesWpCli
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -719,7 +913,7 @@ trait ManagesWpCli
 
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'authors' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'authors' => [], 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -780,7 +974,7 @@ PHP;
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'categories' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'categories' => [], 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -1013,7 +1207,7 @@ PHP;
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'stdout' => '', 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'stdout' => '', 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -1032,7 +1226,7 @@ private function wpCliBatchTerms(WhmServer $server, int $installId, array $names
 
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'term_ids' => [], 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'term_ids' => [], 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -1088,7 +1282,7 @@ private function wpCliBatchTerms(WhmServer $server, int $installId, array $names
     }
 
     /**
-     * Delete a WordPress post via wp-cli SSH.
+     * Delete a WordPress post via WP Toolkit wp-cli.
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -1138,7 +1332,7 @@ public function wpCliDeleteMedia(WhmServer $server, int $installId, int $mediaId
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -1175,7 +1369,7 @@ public function wpCliDeletePost(WhmServer $server, int $installId, int $postId, 
     {
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
+            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
         }
 
         $connection = $ssh['connection'];
@@ -1201,7 +1395,7 @@ public function wpCliDeletePost(WhmServer $server, int $installId, int $postId, 
     }
 
     /**
-     * Delete a WordPress media attachment via wp-cli SSH.
+     * Delete a WordPress media attachment via WP Toolkit wp-cli.
      *
      * @param WhmServer $server
      * @param int       $installId
@@ -1221,7 +1415,7 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
 
         $ssh = $this->getConnection($server);
         if (!$ssh["success"]) {
-            return ["success" => false, "message" => $ssh["error"] ?? "SSH connection failed"];
+            return ["success" => false, "message" => $ssh["error"] ?? "WP Toolkit connection failed"];
         }
 
         $connection = $ssh["connection"];
@@ -1359,6 +1553,24 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
             "source_path" => $sourcePath,
         ]);
         return ["success" => false, "message" => "wp-cli media import failed: " . \Illuminate\Support\Str::limit($cleanOutput ?: "unknown error", 300)];
+    }
+
+
+    public function extractJsonObjectFromOutput(string $output): ?array
+    {
+        $trimmed = trim($output);
+        if ($trimmed === "") {
+            return null;
+        }
+
+        if (preg_match("/\{.*\}/s", $trimmed, $matches)) {
+            $decoded = json_decode($matches[0], true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
     }
 
 

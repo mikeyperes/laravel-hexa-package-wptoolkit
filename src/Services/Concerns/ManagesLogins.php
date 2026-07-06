@@ -81,6 +81,9 @@ PHP;
         $escapedFile = escapeshellarg($filePath);
 
         $cmd = "mkdir -p " . escapeshellarg($muDir) . " && echo '{$b64}' | base64 -d > {$escapedFile} && chown {$escapedUser}:{$escapedUser} {$escapedFile} && chmod 644 {$escapedFile} && echo 'MU_PLUGIN_OK'";
+        if (method_exists($this, "localFilesystemCommand")) {
+            $cmd = $this->localFilesystemCommand($connection, $cmd);
+        }
 
         $output = trim($connection->exec($cmd));
         $connection->disconnect();

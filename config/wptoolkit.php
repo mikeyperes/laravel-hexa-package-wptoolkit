@@ -13,11 +13,11 @@ return [
     | Version
     |--------------------------------------------------------------------------
     */
-    'version' => '3.0.25',
+    'version' => '3.0.26',
 
     /*
     |--------------------------------------------------------------------------
-    | SSH Settings
+    | Remote Connection Settings
     |--------------------------------------------------------------------------
     */
     'ssh' => [
@@ -32,8 +32,8 @@ return [
     |
     | auto  = prefer local execution only when the target server matches a
     |         declared local host AND the current runtime user can actually
-    |         execute the WP Toolkit binary. Otherwise fall back to SSH.
-    | ssh   = always use SSH.
+    |         execute the WP Toolkit binary. Otherwise fall back to remote command transport.
+    | ssh   = always use remote command transport.
     | local = always execute wp-toolkit locally.
     |
     */
@@ -53,12 +53,12 @@ return [
     'cli' => [
         // Shared fallback path to wp-toolkit (used if local/remote-specific paths are empty)
         'binary_path' => env('WPTOOLKIT_BINARY_PATH', null),
-        'local_binary_path' => env('WPTOOLKIT_LOCAL_BINARY_PATH', null),
+        'local_binary_path' => env('WPTOOLKIT_LOCAL_BINARY_PATH', '/usr/local/bin/hexa-wp-toolkit-local'),
         'remote_binary_path' => env('WPTOOLKIT_REMOTE_BINARY_PATH', null),
         'local_wp_binary_path' => env('WPTOOLKIT_LOCAL_WP_BINARY_PATH', null),
         'local_binary_candidates' => array_values(array_filter(array_map(
             static fn ($path) => trim((string) $path),
-            explode(',', (string) env('WPTOOLKIT_LOCAL_BINARY_CANDIDATES', '/usr/local/bin/wp-toolkit,/usr/sbin/wp-toolkit,/opt/cpanel/wp-toolkit/bin/wp-toolkit'))
+            explode(',', (string) env('WPTOOLKIT_LOCAL_BINARY_CANDIDATES', '/usr/local/bin/hexa-wp-toolkit-local,/usr/local/bin/wp-toolkit,/usr/sbin/wp-toolkit,/opt/cpanel/wp-toolkit/bin/wp-toolkit'))
         ))),
         'local_wp_binary_candidates' => array_values(array_filter(array_map(
             static fn ($path) => trim((string) $path),

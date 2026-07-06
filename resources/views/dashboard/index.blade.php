@@ -52,7 +52,7 @@
                 <span class="text-sm font-medium text-gray-700">Execution Mode</span>
                 <select x-model="form.mode" class="mt-1 w-full rounded-lg border-gray-300 text-sm">
                     <option value="auto">Auto</option>
-                    <option value="ssh">SSH Only</option>
+                    <option value="ssh">Remote Only</option>
                     <option value="local">Local Only</option>
                 </select>
             </label>
@@ -99,7 +99,7 @@
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
             <div>
                 <h2 class="text-lg font-semibold text-gray-900">Server Diagnostics</h2>
-                <p class="text-sm text-gray-500 mt-1">See how the app resolved transport, which binary it found, and why it chose local or SSH.</p>
+                <p class="text-sm text-gray-500 mt-1">See how the app resolved transport, which binary it found, and why it chose local or remote.</p>
             </div>
 
             <div class="flex flex-wrap items-end gap-3">
@@ -163,7 +163,7 @@
                             <dd class="mt-1 font-mono text-gray-900" x-text="serverDiagnostics.local_probe.runtime_user || 'unknown'"></dd>
                         </div>
                         <div>
-                            <dt class="font-medium text-gray-500">SSH Runtime User</dt>
+                            <dt class="font-medium text-gray-500">Remote Runtime User</dt>
                             <dd class="mt-1 font-mono text-gray-900" x-text="serverDiagnostics.remote_probe.runtime_user || 'unavailable'"></dd>
                         </div>
                     </dl>
@@ -196,7 +196,7 @@
                         </div>
 
                         <div>
-                            <h3 class="text-sm font-semibold text-gray-800 mb-2">SSH Candidate Checks</h3>
+                            <h3 class="text-sm font-semibold text-gray-800 mb-2">Remote Candidate Checks</h3>
                             <div class="overflow-x-auto">
                                 <table class="min-w-full text-sm">
                                     <thead class="text-left text-gray-500 border-b border-gray-200">

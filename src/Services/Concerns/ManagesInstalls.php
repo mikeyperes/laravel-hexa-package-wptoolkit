@@ -12,7 +12,7 @@ trait ManagesInstalls
     /**
      * Get ALL WordPress installs on a WHM server (all accounts).
      *
-     * Connects via SSH and runs `wp-toolkit --list -format json` without
+     * Connects through the selected WP Toolkit transport and runs `wp-toolkit --list -format json` without
      * a user filter to discover every WordPress installation on the server.
      *
      * @param WhmServer $server The WHM server to scan
@@ -156,7 +156,7 @@ trait ManagesInstalls
     /**
      * Get all WordPress installs for a specific cPanel account.
      *
-     * Connects via SSH and runs `wp-toolkit --list --user <username>` to discover
+     * Connects through the selected WP Toolkit transport and runs `wp-toolkit --list --user <username>` to discover
      * all WordPress installations under the given cPanel user.
      *
      * @param WhmServer $server   The WHM server to connect to
@@ -171,7 +171,7 @@ trait ManagesInstalls
             'username' => $username,
         ]);
 
-        // Step 1: Connect via SSH
+        // Step 1: Connect through WP Toolkit transport
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return $ssh;
