@@ -67,6 +67,11 @@ class WpCliHarness
         };
     }
 
+    public function commandTimeoutSeconds(): int
+    {
+        return 120;
+    }
+
     protected function getConnection($server): array
     {
         return ['success' => true, 'connection' => new LocalShellConnection()];
