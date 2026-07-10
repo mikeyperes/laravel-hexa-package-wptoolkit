@@ -14,6 +14,8 @@ trait ManagesWpCli
 {
     use ManagesWpCliMedia;
 
+    abstract public function commandTimeoutSeconds(): int;
+
     /**
      * Create a WordPress post via wp-cli SSH.
      *
