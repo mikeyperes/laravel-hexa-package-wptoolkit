@@ -42,6 +42,10 @@ trait InspectsWpToolkitRuntime
 
         return [
             'mode' => $mode,
+            'force_local_in_production' => $this->truthy($this->settingValue(
+                'wptoolkit_force_local_in_production',
+                config('wptoolkit.execution.force_local_in_production', false)
+            )),
             'local_hosts' => array_values(array_filter(array_map(
                 static fn ($host) => strtolower(trim((string) $host)),
                 explode(',', $localHostsRaw)
@@ -67,20 +71,20 @@ trait InspectsWpToolkitRuntime
     {
         $localProbe = $this->probeLocalRuntime();
         $sameHost = $this->serverMatchesLocalHost($server);
-        $remoteProbe = $sameHost
-            ? [
-                'transport' => 'local-only',
+        $transport = $this->connectionMode($server);
+        $remoteProbe = $transport === 'ssh'
+            ? $this->probeRemoteRuntime($server)
+            : [
+                'transport' => 'not-selected',
                 'connected' => false,
                 'runtime_user' => null,
                 'hostname' => $server->hostname,
                 'usable' => false,
                 'selected_binary' => null,
-                'reason' => 'Same-server target: remote probe skipped because local WP Toolkit execution is required.',
+                'reason' => 'Remote probe skipped because local WP Toolkit execution was selected.',
                 'candidates' => [],
                 'error' => null,
-            ]
-            : $this->probeRemoteRuntime($server);
-        $transport = $this->connectionMode($server);
+            ];
 
         return [
             'success' => true,
@@ -118,6 +122,19 @@ trait InspectsWpToolkitRuntime
     {
         $value = trim((string) $value);
         return $value !== '' ? $value : null;
+    }
+
+    protected function truthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
     }
 
     protected function candidatePaths(string $transport): array
@@ -277,19 +294,33 @@ trait InspectsWpToolkitRuntime
     {
         $settings = $this->runtimeSettings();
 
-        if ($this->serverMatchesLocalHost($server)) {
-            return ($localProbe['usable'] ?? false)
-                ? 'Same-server target: local WP Toolkit execution is required and available.'
-                : 'Same-server target: local WP Toolkit execution is required, but the current runtime user cannot execute the local WP Toolkit binary. Remote fallback is disabled.';
-        }
-
         if ($settings['mode'] === 'local') {
             return ($localProbe['usable'] ?? false)
                 ? 'Forced local execution via WP Toolkit settings.'
                 : 'Forced local execution via WP Toolkit settings, but the current runtime user cannot execute the local WP Toolkit binary.';
         }
+
         if ($settings['mode'] === 'ssh') {
             return 'Forced remote execution via WP Toolkit settings.';
+        }
+
+        if (
+            ($settings['force_local_in_production'] ?? false)
+            && app()->environment('production')
+        ) {
+            return ($localProbe['usable'] ?? false)
+                ? 'Auto mode selected local execution because production local execution is enabled.'
+                : 'Auto mode selected local execution because production local execution is enabled, but the current runtime user cannot execute the local WP Toolkit binary.';
+        }
+
+        if ($this->serverMatchesLocalHost($server)) {
+            if (strtolower($this->currentRuntimeUser()) === 'root') {
+                return ($localProbe['usable'] ?? false)
+                    ? 'Auto mode selected local execution for a same-server root runtime.'
+                    : 'Auto mode selected local execution for a same-server root runtime, but no usable local WP Toolkit binary was found.';
+            }
+
+            return 'Auto mode selected remote execution for a same-server web runtime because CloudLinux/CageFS can block nested local WP Toolkit commands.';
         }
 
         return 'Auto mode selected remote execution because the target host does not match the configured local hosts.';
@@ -429,20 +460,6 @@ trait InspectsWpToolkitRuntime
 
     protected function probeRemoteRuntime(WhmServer $server, ?SSH2 $existingConnection = null): array
     {
-        if ($this->serverMatchesLocalHost($server)) {
-            return [
-                'transport' => 'local-only',
-                'connected' => false,
-                'runtime_user' => null,
-                'hostname' => $server->hostname,
-                'usable' => false,
-                'selected_binary' => null,
-                'reason' => 'Same-server target: remote probe skipped because local WP Toolkit execution is required.',
-                'candidates' => [],
-                'error' => null,
-            ];
-        }
-
         $cacheKey = $server->id . ':' . $server->hostname;
         if (isset($this->remoteProbeCache[$cacheKey])) {
             return $this->remoteProbeCache[$cacheKey];

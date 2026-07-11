@@ -128,18 +128,26 @@ trait ManagesWpToolkitConnections
     {
         $settings = $this->runtimeSettings();
 
+        if ($settings['mode'] === 'local') {
+            return 'local';
+        }
+
+        if ($settings['mode'] === 'ssh') {
+            return 'ssh';
+        }
+
+        if (
+            ($settings['force_local_in_production'] ?? false)
+            && app()->environment('production')
+        ) {
+            return 'local';
+        }
+
         // Root CLI can safely use local execution. Web/PHP-FPM users on the same
         // host are usually inside CloudLinux/CageFS LVE, where nested wp-toolkit
         // calls fail; use the configured root SSH transport for those requests.
         if ($this->serverMatchesLocalHost($server)) {
             return strtolower($this->currentRuntimeUser()) === 'root' ? 'local' : 'ssh';
-        }
-
-        if ($settings['mode'] === 'local') {
-            return 'local';
-        }
-        if ($settings['mode'] === 'ssh') {
-            return 'ssh';
         }
 
         return 'ssh';

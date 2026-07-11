@@ -13,7 +13,7 @@ return [
     | Version
     |--------------------------------------------------------------------------
     */
-    'version' => '3.0.30',
+    'version' => '3.0.31',
 
     /*
     |--------------------------------------------------------------------------
@@ -39,6 +39,7 @@ return [
     */
     'execution' => [
         'mode' => env('WPTOOLKIT_EXECUTION_MODE', 'auto'),
+        'force_local_in_production' => (bool) env('WPTOOLKIT_FORCE_LOCAL_IN_PRODUCTION', false),
         'local_hosts' => array_values(array_filter(array_map(
             static fn ($host) => trim((string) $host),
             explode(',', (string) env('WPTOOLKIT_LOCAL_HOSTS', ''))
