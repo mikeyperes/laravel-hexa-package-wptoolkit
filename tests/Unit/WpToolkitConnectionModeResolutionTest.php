@@ -93,6 +93,10 @@ class WpToolkitConnectionModeResolutionTest extends TestCase
                 parent::__construct($generic, $whm);
             }
 
+            protected function probeLocalRuntime(): array
+            {
+                return ["usable" => $this->runtimeUser === "root"];
+            }
             protected function currentRuntimeUser(): string
             {
                 return $this->runtimeUser;
