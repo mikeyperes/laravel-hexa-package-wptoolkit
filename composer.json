@@ -4,7 +4,8 @@
     "type": "library",
     "license": "MIT",
     "require": {
-        "php": "^8.2"
+        "php": "^8.2",
+        "hexawebsystems/laravel-hexa-package-whm": "*"
     },
     "autoload": {
         "psr-4": {
