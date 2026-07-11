@@ -72,8 +72,25 @@ class WpToolkitDashboardController extends Controller
                 ]);
         }
 
+        $serverPayload = $servers->map(static fn (WhmServer $server): array => [
+            'id' => $server->id,
+            'name' => $server->name,
+            'hostname' => $server->hostname,
+        ])->values();
+
+        $publishSitePayload = $publishSites->map(static fn ($site): array => [
+            'id' => $site->id,
+            'name' => $site->name,
+            'url' => $site->url,
+            'install_id' => $site->wordpress_install_id,
+            'status' => $site->status,
+            'last_error' => $site->last_error,
+        ])->values();
+
         return view('wptoolkit::dashboard.index', [
             'servers' => $servers,
+            'serverPayload' => $serverPayload,
+            'publishSitePayload' => $publishSitePayload,
             'publishSites' => $publishSites,
             'settings' => $this->wpToolkit->runtimeSettings(),
         ]);
