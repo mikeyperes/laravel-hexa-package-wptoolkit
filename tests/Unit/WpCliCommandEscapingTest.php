@@ -3,6 +3,8 @@
 namespace Tests\Unit;
 
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wptoolkit\Support\LocalShellConnection;
+use phpseclib3\Net\SSH2;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
 use PHPUnit\Framework\TestCase;
 
@@ -20,7 +22,7 @@ class WpCliCommandEscapingTest extends TestCase
         $this->assertStringContainsString('-- eval "$CODE" 2>&1', $harness->commands[0]);
     }
 
-    public function test_wp_cli_create_post_escapes_tag_eval_command(): void
+    public function test_wp_cli_create_post_uses_a_staged_tag_eval_file(): void
     {
         $harness = new WpCliHarness();
         $server = new WhmServer();
@@ -39,9 +41,10 @@ class WpCliCommandEscapingTest extends TestCase
         );
 
         $this->assertTrue($result['success']);
-        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- eval'));
+        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- eval-file'));
         $this->assertNotNull($tagCommand);
-        $this->assertStringContainsString('$CODE', $tagCommand);
+        $this->assertStringContainsString("-- eval-file '/tmp/.hexa_wp_tags_", $tagCommand);
+        $this->assertStringNotContainsString('$CODE', $tagCommand);
     }
 }
 
@@ -65,9 +68,14 @@ class WpCliHarness
         };
     }
 
+    public function commandTimeoutSeconds(): int
+    {
+        return 120;
+    }
+
     protected function getConnection($server): array
     {
-        return ['success' => true, 'connection' => (object) []];
+        return ['success' => true, 'connection' => new LocalShellConnection()];
     }
 
     protected function shellBinary($connection, $server): string
@@ -75,9 +83,18 @@ class WpCliHarness
         return '/usr/local/bin/wp-toolkit';
     }
 
+    protected function wpCliBaseCommand(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): string
+    {
+        return '/usr/local/bin/wp-toolkit --wp-cli -instance-id '.escapeshellarg((string) $installId).' --';
+    }
+
     protected function execWithConnection($connection, string $command): string
     {
         $this->commands[] = $command;
+
+        if (str_contains($command, '__HEXA_CMD_EXIT__')) {
+            return "Success: ok\n__HEXA_CMD_EXIT__:0";
+        }
 
         if (str_contains($command, '-- post create')) {
             return '321';
