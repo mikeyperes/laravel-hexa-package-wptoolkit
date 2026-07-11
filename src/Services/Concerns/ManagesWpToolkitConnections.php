@@ -114,7 +114,7 @@ trait ManagesWpToolkitConnections
             return 'local';
         }
 
-        if ($this->serverMatchesLocalHost($server) && ($localProbe['usable'] ?? false)) {
+        if ($settings['mode'] === 'auto' && $this->serverMatchesLocalHost($server) && ($localProbe['usable'] ?? false)) {
             return 'local';
         }
 
@@ -125,7 +125,6 @@ trait ManagesWpToolkitConnections
         if (
             ($settings['force_local_in_production'] ?? false)
             && app()->environment('production')
-            && ($localProbe['usable'] ?? false)
         ) {
             return 'local';
         }

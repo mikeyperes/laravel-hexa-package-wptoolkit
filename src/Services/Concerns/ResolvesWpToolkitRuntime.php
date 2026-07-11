@@ -53,9 +53,21 @@ trait ResolvesWpToolkitRuntime
     public function inspectCommandRuntime(WhmServer $server): array
     {
         $localProbe = $this->probeLocalRuntime();
-        $remoteProbe = $this->probeRemoteRuntime($server);
         $sameHost = $this->serverMatchesLocalHost($server);
         $transport = $this->connectionMode($server);
+        $remoteProbe = $transport === 'ssh'
+            ? $this->probeRemoteRuntime($server)
+            : [
+                'transport' => 'not-selected',
+                'connected' => false,
+                'runtime_user' => null,
+                'hostname' => $server->hostname,
+                'usable' => false,
+                'selected_binary' => null,
+                'reason' => 'Remote probe skipped because local WP Toolkit execution was selected.',
+                'candidates' => [],
+                'error' => null,
+            ];
 
         return [
             'success' => true,
@@ -270,17 +282,13 @@ trait ResolvesWpToolkitRuntime
                 : 'Forced local execution via WP Toolkit settings, but the current runtime user cannot execute the local WP Toolkit binary.';
         }
         if ($settings['mode'] === 'ssh') {
-            if ($this->serverMatchesLocalHost($server) && ($localProbe['usable'] ?? false)) {
-                return 'Same-host target selected local execution even though WP Toolkit settings request SSH; local is faster and avoids self-SSH.';
-            }
-
             return 'Forced SSH execution via WP Toolkit settings.';
         }
 
         if (($settings['force_local_in_production'] ?? false) && app()->environment('production')) {
             return ($localProbe['usable'] ?? false)
                 ? 'Auto mode selected local execution because production local execution is enabled and the runtime user can execute WP Toolkit locally.'
-                : 'Auto mode fell back to SSH because production local execution is enabled, but the current runtime user cannot execute WP Toolkit locally.';
+                : 'Production force-local execution is enabled, but the current runtime user cannot execute the local WP Toolkit binary.';
         }
 
         if ($this->serverMatchesLocalHost($server)) {
