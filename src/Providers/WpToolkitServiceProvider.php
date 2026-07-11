@@ -5,6 +5,7 @@ namespace hexa_package_wptoolkit\Providers;
 use Illuminate\Support\ServiceProvider;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use hexa_core\Services\PackageRegistryService;
+use hexa_core\Support\PackageAssetRegistry;
 
 /**
  * Registers the WP Toolkit package: config, routes, views, services.
@@ -32,6 +33,12 @@ class WpToolkitServiceProvider extends ServiceProvider
     {
         $this->loadRoutesFrom(__DIR__ . '/../../routes/wptoolkit.php');
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'wptoolkit');
+        app(PackageAssetRegistry::class)->register("wptoolkit", dirname(__DIR__, 2) . "/resources/js", [
+            "account-wordpress.js",
+            "dashboard.js",
+            "raw.js",
+        ]);
+
         $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
 
         // Publish config
