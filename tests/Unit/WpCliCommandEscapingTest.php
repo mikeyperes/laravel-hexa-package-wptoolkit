@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
+use phpseclib3\Net\SSH2;
 use PHPUnit\Framework\TestCase;
 
 class WpCliCommandEscapingTest extends TestCase
@@ -17,7 +18,7 @@ class WpCliCommandEscapingTest extends TestCase
 
         $this->assertTrue($result['success']);
         $this->assertNotEmpty($harness->commands);
-        $this->assertStringContainsString('-- eval "$CODE" 2>&1', $harness->commands[0]);
+        $this->assertStringContainsString('eval "$CODE" 2>&1', $harness->commands[0]);
     }
 
     public function test_wp_cli_create_post_escapes_tag_eval_command(): void
@@ -39,7 +40,7 @@ class WpCliCommandEscapingTest extends TestCase
         );
 
         $this->assertTrue($result['success']);
-        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- eval'));
+        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, ' eval "'));
         $this->assertNotNull($tagCommand);
         $this->assertStringContainsString('$CODE', $tagCommand);
     }
@@ -67,7 +68,7 @@ class WpCliHarness
 
     protected function getConnection($server): array
     {
-        return ['success' => true, 'connection' => (object) []];
+        return ['success' => true, 'connection' => new SSH2('127.0.0.1')];
     }
 
     protected function shellBinary($connection, $server): string
@@ -75,15 +76,24 @@ class WpCliHarness
         return '/usr/local/bin/wp-toolkit';
     }
 
+    protected function isCommandRefusalOutput(string $output): bool
+    {
+        return false;
+    }
+
     protected function execWithConnection($connection, string $command): string
     {
         $this->commands[] = $command;
 
-        if (str_contains($command, '-- post create')) {
+        if (str_contains($command, '__HEXA_CMD_EXIT__')) {
+            return "Success: ok\n__HEXA_CMD_EXIT__:0";
+        }
+
+        if (str_contains($command, ' post create')) {
             return '321';
         }
 
-        if (str_contains($command, '-- post get')) {
+        if (str_contains($command, ' post get')) {
             return 'https://example.com/posts/audit-post';
         }
 
