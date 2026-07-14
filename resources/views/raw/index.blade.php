@@ -247,5 +247,6 @@
 
 </div>
 
-<script>@include('wptoolkit::scripts.raw-index.block-1-part-1')</script>
+@include("wptoolkit::raw.partials.config")
+<x-hexa-package-script package="wptoolkit" :version="config('wptoolkit.version')" asset="raw.js" />
 @endsection

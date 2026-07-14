@@ -1,65 +1,12 @@
 <?php
 
-namespace hexa_package_wptoolkit\Services\Concerns\WpToolkit;
+namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_core\Models\Setting;
 use hexa_package_whm\Models\WhmServer;
-use hexa_package_whm\Services\WhmService;
-use hexa_core\Services\GenericService;
-use hexa_package_wptoolkit\Services\Concerns\ManagesInstalls;
-use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
-use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
-use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
-use hexa_package_wptoolkit\Support\LocalShellConnection;
-use phpseclib3\Net\SSH2;
-use phpseclib3\Crypt\PublicKeyLoader;
 
 trait ResolvesWpToolkitRuntime
 {
-    /**
-     * Resolve the wp-toolkit binary path for the current command transport.
-     *
-     * @return string
-     */
-    public function wptBinary(SSH2|LocalShellConnection|null $connection = null, ?WhmServer $server = null): string
-    {
-        if ($connection instanceof LocalShellConnection) {
-            return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
-        }
-
-        if ($connection instanceof SSH2 && $server) {
-            return (string) ($this->probeRemoteRuntime($server, $connection)['selected_binary'] ?? 'wp-toolkit');
-        }
-
-        if ($server && $this->connectionMode($server) === 'local') {
-            return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
-        }
-
-        if ($server) {
-            return (string) ($this->probeRemoteRuntime($server)['selected_binary'] ?? 'wp-toolkit');
-        }
-
-        return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
-    }
-
-    public function shellBinary(SSH2|LocalShellConnection|null $connection = null, ?WhmServer $server = null): string
-    {
-        return escapeshellarg($this->wptBinary($connection, $server));
-    }
-
-    public function localWpCliBinary(?LocalShellConnection $connection = null): ?string
-    {
-        $probe = $this->probeLocalWpCliRuntime($connection);
-
-        if (!($probe['usable'] ?? false)) {
-            return null;
-        }
-
-        $binary = trim((string) ($probe['selected_binary'] ?? ''));
-
-        return $binary !== '' ? $binary : null;
-    }
-
     public function runtimeSettings(): array
     {
         $mode = strtolower(trim((string) $this->settingValue('wptoolkit_execution_mode', config('wptoolkit.execution.mode', 'auto'))));
@@ -74,6 +21,14 @@ trait ResolvesWpToolkitRuntime
 
         return [
             'mode' => $mode,
+            'force_local_in_production' => $this->truthy($this->settingValue(
+                'wptoolkit_force_local_in_production',
+                config('wptoolkit.execution.force_local_in_production', false)
+            )),
+            'require_privilege_bridge' => $this->truthy($this->settingValue(
+                'wptoolkit_require_privilege_bridge',
+                config('wptoolkit.execution.require_privilege_bridge', true)
+            )),
             'local_hosts' => array_values(array_filter(array_map(
                 static fn ($host) => strtolower(trim((string) $host)),
                 explode(',', $localHostsRaw)
@@ -98,9 +53,21 @@ trait ResolvesWpToolkitRuntime
     public function inspectCommandRuntime(WhmServer $server): array
     {
         $localProbe = $this->probeLocalRuntime();
-        $remoteProbe = $this->probeRemoteRuntime($server);
         $sameHost = $this->serverMatchesLocalHost($server);
         $transport = $this->connectionMode($server);
+        $remoteProbe = $transport === 'ssh'
+            ? $this->probeRemoteRuntime($server)
+            : [
+                'transport' => 'not-selected',
+                'connected' => false,
+                'runtime_user' => null,
+                'hostname' => $server->hostname,
+                'usable' => false,
+                'selected_binary' => null,
+                'reason' => 'Remote probe skipped because local WP Toolkit execution was selected.',
+                'candidates' => [],
+                'error' => null,
+            ];
 
         return [
             'success' => true,
@@ -138,6 +105,19 @@ trait ResolvesWpToolkitRuntime
     {
         $value = trim((string) $value);
         return $value !== '' ? $value : null;
+    }
+
+    protected function truthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
     }
 
     protected function candidatePaths(string $transport): array
@@ -302,11 +282,13 @@ trait ResolvesWpToolkitRuntime
                 : 'Forced local execution via WP Toolkit settings, but the current runtime user cannot execute the local WP Toolkit binary.';
         }
         if ($settings['mode'] === 'ssh') {
-            if ($this->serverMatchesLocalHost($server) && ($localProbe['usable'] ?? false)) {
-                return 'Same-host target selected local execution even though WP Toolkit settings request SSH; local is faster and avoids self-SSH.';
-            }
-
             return 'Forced SSH execution via WP Toolkit settings.';
+        }
+
+        if (($settings['force_local_in_production'] ?? false) && app()->environment('production')) {
+            return ($localProbe['usable'] ?? false)
+                ? 'Auto mode selected local execution because production local execution is enabled and the runtime user can execute WP Toolkit locally.'
+                : 'Production force-local execution is enabled, but the current runtime user cannot execute the local WP Toolkit binary.';
         }
 
         if ($this->serverMatchesLocalHost($server)) {
@@ -370,4 +352,5 @@ trait ResolvesWpToolkitRuntime
             && (($sudoPerms & 04000) === 04000)
             && is_executable($bridge);
     }
+
 }

@@ -1,18 +1,11 @@
 <?php
 
-namespace hexa_package_wptoolkit\Services\Concerns\WpToolkit;
+namespace hexa_package_wptoolkit\Services\Concerns;
 
-use hexa_core\Models\Setting;
 use hexa_package_whm\Models\WhmServer;
-use hexa_package_whm\Services\WhmService;
-use hexa_core\Services\GenericService;
-use hexa_package_wptoolkit\Services\Concerns\ManagesInstalls;
-use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
-use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
-use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
-use phpseclib3\Net\SSH2;
 use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib3\Net\SSH2;
 
 trait ManagesWpToolkitConnections
 {
@@ -121,12 +114,19 @@ trait ManagesWpToolkitConnections
             return 'local';
         }
 
-        if ($this->serverMatchesLocalHost($server) && ($localProbe['usable'] ?? false)) {
+        if ($settings['mode'] === 'auto' && $this->serverMatchesLocalHost($server) && ($localProbe['usable'] ?? false)) {
             return 'local';
         }
 
         if ($settings['mode'] === 'ssh') {
             return 'ssh';
+        }
+
+        if (
+            ($settings['force_local_in_production'] ?? false)
+            && app()->environment('production')
+        ) {
+            return 'local';
         }
 
         return 'ssh';
@@ -228,4 +228,49 @@ trait ManagesWpToolkitConnections
             'connection' => $connection,
         ];
     }
+
+    /**
+     * Resolve the wp-toolkit binary path for the current command transport.
+     *
+     * @return string
+     */
+    public function wptBinary(SSH2|LocalShellConnection|null $connection = null, ?WhmServer $server = null): string
+    {
+        if ($connection instanceof LocalShellConnection) {
+            return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
+        }
+
+        if ($connection instanceof SSH2 && $server) {
+            return (string) ($this->probeRemoteRuntime($server, $connection)['selected_binary'] ?? 'wp-toolkit');
+        }
+
+        if ($server && $this->connectionMode($server) === 'local') {
+            return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
+        }
+
+        if ($server) {
+            return (string) ($this->probeRemoteRuntime($server)['selected_binary'] ?? 'wp-toolkit');
+        }
+
+        return (string) ($this->probeLocalRuntime()['selected_binary'] ?? 'wp-toolkit');
+    }
+
+    public function shellBinary(SSH2|LocalShellConnection|null $connection = null, ?WhmServer $server = null): string
+    {
+        return escapeshellarg($this->wptBinary($connection, $server));
+    }
+
+    public function localWpCliBinary(?LocalShellConnection $connection = null): ?string
+    {
+        $probe = $this->probeLocalWpCliRuntime($connection);
+
+        if (!($probe['usable'] ?? false)) {
+            return null;
+        }
+
+        $binary = trim((string) ($probe['selected_binary'] ?? ''));
+
+        return $binary !== '' ? $binary : null;
+    }
+
 }

@@ -4,38 +4,7 @@
 @section('header', 'WP Toolkit Settings')
 
 @section('content')
-@php
-    $serverPayload = $servers->map(fn ($server) => [
-        'id' => $server->id,
-        'name' => $server->name,
-        'hostname' => $server->hostname,
-    ])->values();
-
-    $publishSitePayload = $publishSites->map(fn ($site) => [
-        'id' => $site->id,
-        'name' => $site->name,
-        'url' => $site->url,
-        'install_id' => $site->wordpress_install_id,
-        'status' => $site->status,
-        'last_error' => $site->last_error,
-    ])->values();
-@endphp
-<div
-    class="max-w-6xl mx-auto space-y-6"
-    x-data="wpToolkitSettingsPage({
-        csrf: @js(csrf_token()),
-        settings: @js($settings),
-        servers: @js($serverPayload),
-        publishSites: @js($publishSitePayload),
-        routes: {
-            saveSettings: @js(route('wptoolkit.settings.save')),
-            serverDiagnostics: @js(route('wptoolkit.diagnostics.server')),
-            siteTest: @js(route('wptoolkit.diagnostics.site-test')),
-            getAllInstalls: @js(route('wptoolkit.get-all-installs')),
-            raw: @js(route('wptoolkit.raw')),
-        },
-    })"
->
+<div class="max-w-6xl mx-auto space-y-6" x-data="wpToolkitSettingsPage()">
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <div class="flex items-start justify-between gap-4">
             <div>
@@ -298,5 +267,6 @@
     </div>
 </div>
 
-<script>@include('wptoolkit::scripts.dashboard-index.block-1-part-1')</script>
+@include("wptoolkit::dashboard.partials.config")
+<x-hexa-package-script package="wptoolkit" :version="config('wptoolkit.version')" asset="dashboard.js" />
 @endsection

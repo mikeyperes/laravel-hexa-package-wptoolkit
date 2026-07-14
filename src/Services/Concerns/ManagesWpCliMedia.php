@@ -1,13 +1,12 @@
 <?php
 
-namespace hexa_package_wptoolkit\Services\Concerns\WpCli;
+namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
-use Illuminate\Support\Facades\Cache;
 use phpseclib3\Net\SSH2;
 
-trait SupportsWpCliMediaSelection
+trait ManagesWpCliMedia
 {
     public function wpCliMediaSelector(WhmServer $server, int $installId, array $query = []): array
     {

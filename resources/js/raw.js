@@ -1,6 +1,7 @@
-
 document.addEventListener('DOMContentLoaded', function() {
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '{{ csrf_token() }}';
+    const configNode = document.getElementById("wptoolkit-raw-config");
+    const config = configNode ? JSON.parse(configNode.textContent) : {};
+    const csrfToken = config.csrfToken || document.querySelector('meta[name="csrf-token"]')?.content || "";
 
     // Current selection state
     let currentInstall = null;  // {id, path, url, cpanel_user, version}
@@ -25,7 +26,7 @@ document.addEventListener('DOMContentLoaded', function() {
         currentInstall = null;
         currentAdminUser = null;
 
-        fetch('{{ route("wptoolkit.get-all-installs") }}', {
+        fetch(config.routes.getAllInstalls, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: JSON.stringify({ server_id: serverId }),
@@ -138,7 +139,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const serverId = document.getElementById('server-select').value;
 
-        fetch('{{ route("wptoolkit.get-credentials") }}', {
+        fetch(config.routes.getCredentials, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: JSON.stringify({
@@ -253,7 +254,7 @@ document.addEventListener('DOMContentLoaded', function() {
         btnText.textContent = 'Generating...';
         btn.disabled = true;
 
-        fetch('{{ route("wptoolkit.wp-login") }}', {
+        fetch(config.routes.wpLogin, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: JSON.stringify({
@@ -298,7 +299,7 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.disabled = true;
         document.getElementById('password-box').classList.add('hidden');
 
-        fetch('{{ route("wptoolkit.reset-password") }}', {
+        fetch(config.routes.resetPassword, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: JSON.stringify({
@@ -343,7 +344,7 @@ document.addEventListener('DOMContentLoaded', function() {
         btnText.textContent = 'Generating...';
         btn.disabled = true;
 
-        fetch('{{ route("wptoolkit.cpanel-login") }}', {
+        fetch(config.routes.cpanelLogin, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: JSON.stringify({

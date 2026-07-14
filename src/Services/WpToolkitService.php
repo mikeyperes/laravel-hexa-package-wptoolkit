@@ -2,17 +2,17 @@
 
 namespace hexa_package_wptoolkit\Services;
 
-use hexa_core\Models\Setting;
-use hexa_package_whm\Models\WhmServer;
 use hexa_package_whm\Services\WhmService;
 use hexa_core\Services\GenericService;
 use hexa_package_wptoolkit\Services\Concerns\ManagesInstalls;
 use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
 use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
-use hexa_package_wptoolkit\Support\LocalShellConnection;
-use phpseclib3\Net\SSH2;
-use phpseclib3\Crypt\PublicKeyLoader;
+use hexa_package_wptoolkit\Services\Concerns\ManagesWpToolkitConnections;
+use hexa_package_wptoolkit\Services\Concerns\ManagesWpToolkitOperations;
+use hexa_package_wptoolkit\Services\Concerns\ProbesWpToolkitRuntime;
+use hexa_package_wptoolkit\Services\Concerns\ResolvesWpToolkitRuntime;
+use hexa_package_wptoolkit\Services\Concerns\RunsWpToolkitCommands;
 
 /**
  * WpToolkitService — all WP Toolkit operations go through this service.
@@ -28,14 +28,13 @@ use phpseclib3\Crypt\PublicKeyLoader;
  */
 class WpToolkitService
 {
-    use \hexa_package_wptoolkit\Services\Concerns\WpToolkit\ManagesWpToolkitConnections;
-    use \hexa_package_wptoolkit\Services\Concerns\WpToolkit\ResolvesWpToolkitRuntime;
-    use \hexa_package_wptoolkit\Services\Concerns\WpToolkit\ProbesWpToolkitRuntime;
-    use \hexa_package_wptoolkit\Services\Concerns\WpToolkit\OperatesWpToolkitInstalls;
-    use \hexa_package_wptoolkit\Services\Concerns\WpToolkit\RunsWpToolkitCommands;
-
     use ManagesInstalls;
     use ManagesCredentials;
+    use ManagesWpToolkitConnections;
+    use ManagesWpToolkitOperations;
+    use ProbesWpToolkitRuntime;
+    use ResolvesWpToolkitRuntime;
+    use RunsWpToolkitCommands;
     use ManagesLogins;
     use ManagesWpCli;
 
@@ -59,80 +58,4 @@ class WpToolkitService
         $this->generic = $generic;
         $this->whm = $whm;
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
+use hexa_package_wptoolkit\Support\LocalShellConnection;
 use phpseclib3\Net\SSH2;
 use PHPUnit\Framework\TestCase;
 
@@ -18,7 +19,7 @@ class WpCliCommandEscapingTest extends TestCase
 
         $this->assertTrue($result['success']);
         $this->assertNotEmpty($harness->commands);
-        $this->assertStringContainsString('eval "$CODE" 2>&1', $harness->commands[0]);
+        $this->assertStringContainsString('-- eval "$CODE" 2>&1', $harness->commands[0]);
     }
 
     public function test_wp_cli_create_post_escapes_tag_eval_command(): void
@@ -40,7 +41,7 @@ class WpCliCommandEscapingTest extends TestCase
         );
 
         $this->assertTrue($result['success']);
-        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, ' eval "'));
+        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- eval'));
         $this->assertNotNull($tagCommand);
         $this->assertStringContainsString('$CODE', $tagCommand);
     }
@@ -66,14 +67,24 @@ class WpCliHarness
         };
     }
 
+    public function commandTimeoutSeconds(): int
+    {
+        return 120;
+    }
+
     protected function getConnection($server): array
     {
-        return ['success' => true, 'connection' => new SSH2('127.0.0.1')];
+        return ['success' => true, 'connection' => new LocalShellConnection()];
     }
 
     protected function shellBinary($connection, $server): string
     {
         return '/usr/local/bin/wp-toolkit';
+    }
+
+    protected function wpCliBaseCommand(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): string
+    {
+        return '/usr/local/bin/wp-toolkit --wp-cli -instance-id ' . escapeshellarg((string) $installId) . ' --';
     }
 
     protected function isCommandRefusalOutput(string $output): bool
@@ -89,11 +100,11 @@ class WpCliHarness
             return "Success: ok\n__HEXA_CMD_EXIT__:0";
         }
 
-        if (str_contains($command, ' post create')) {
+        if (str_contains($command, '-- post create')) {
             return '321';
         }
 
-        if (str_contains($command, ' post get')) {
+        if (str_contains($command, '-- post get')) {
             return 'https://example.com/posts/audit-post';
         }
 

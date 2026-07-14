@@ -1,3 +1,7 @@
+window.wpToolkitConfig = function (id) {
+    const configNode = document.getElementById(id);
+    return configNode ? JSON.parse(configNode.textContent) : {};
+};
 
 document.addEventListener('alpine:init', function() {
     if (Alpine.components && Alpine.components.wpToolkit) return;

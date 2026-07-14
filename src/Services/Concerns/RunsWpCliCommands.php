@@ -1,13 +1,12 @@
 <?php
 
-namespace hexa_package_wptoolkit\Services\Concerns\WpCli;
+namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
-use Illuminate\Support\Facades\Cache;
 use phpseclib3\Net\SSH2;
 
-trait SupportsWpCliConnections
+trait RunsWpCliCommands
 {
     protected function wpCliBaseCommand(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): string
     {
@@ -158,13 +157,4 @@ trait SupportsWpCliConnections
             'lines' => $lines,
         ];
     }
-
-    /**
-     * Create or get a WordPress category via wp-cli SSH.
-     *
-     * @param WhmServer $server
-     * @param int       $installId
-     * @param string    $name Category name
-     * @return array{success: bool, term_id?: int, message: string}
-     */
 }

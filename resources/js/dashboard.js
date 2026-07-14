@@ -1,5 +1,6 @@
-
-function wpToolkitSettingsPage(config) {
+function wpToolkitSettingsPage() {
+    const configNode = document.getElementById("wptoolkit-dashboard-config");
+    const config = configNode ? JSON.parse(configNode.textContent) : {};
     return {
         routes: config.routes,
         servers: config.servers || [],

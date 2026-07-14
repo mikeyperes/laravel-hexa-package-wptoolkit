@@ -1,18 +1,10 @@
 <?php
 
-namespace hexa_package_wptoolkit\Services\Concerns\WpToolkit;
+namespace hexa_package_wptoolkit\Services\Concerns;
 
-use hexa_core\Models\Setting;
 use hexa_package_whm\Models\WhmServer;
-use hexa_package_whm\Services\WhmService;
-use hexa_core\Services\GenericService;
-use hexa_package_wptoolkit\Services\Concerns\ManagesInstalls;
-use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
-use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
-use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
 use phpseclib3\Net\SSH2;
-use phpseclib3\Crypt\PublicKeyLoader;
 
 trait ProbesWpToolkitRuntime
 {
@@ -79,8 +71,14 @@ trait ProbesWpToolkitRuntime
             }
         }
 
+        $probe['privilege_bridge_required'] = (bool) ($settings['require_privilege_bridge'] ?? true);
         $probe['privilege_bridge_usable'] = $this->localPrivilegeBridgeUsable();
-        if (($probe['usable'] ?? false) && $probe['runtime_user'] !== 'root' && !($probe['privilege_bridge_usable'] ?? false)) {
+        if (
+            ($probe['usable'] ?? false)
+            && $probe['runtime_user'] !== 'root'
+            && ($probe['privilege_bridge_required'] ?? true)
+            && !($probe['privilege_bridge_usable'] ?? false)
+        ) {
             $probe['usable'] = false;
             $probe['reason'] = 'Local WP Toolkit binary exists, but the same-host privilege bridge is unavailable. Falling back to SSH to avoid broken local file operations.';
         }

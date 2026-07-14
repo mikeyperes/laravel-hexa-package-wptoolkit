@@ -15,21 +15,27 @@
 
 @if(Route::has('wptoolkit.get-installs'))
 @push('scripts')
-<script>@include('wptoolkit::scripts.partials-account-wordpress.block-1-part-1')</script>
+@once
+<x-hexa-package-script package="wptoolkit" :version="config('wptoolkit.version')" asset="account-wordpress.js" />
+@endonce
 @endpush
 
+<script id="wptoolkit-account-config-{{ $server->id }}-{{ $account->id }}" type="application/json">
+{!! Illuminate\Support\Js::encode([
+    "serverId" => $server->id,
+    "username" => $account->username,
+    "routes" => [
+        "getInstalls" => route("wptoolkit.get-installs"),
+        "getCredentials" => route("wptoolkit.get-credentials"),
+        "wpLogin" => route("wptoolkit.wp-login"),
+        "resetPassword" => route("wptoolkit.reset-password"),
+        "testLogin" => route("wptoolkit.test-login"),
+    ],
+]) !!}
+</script>
+
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6"
-     x-data="wpToolkit({
-        serverId: {{ $server->id }},
-        username: '{{ $account->username }}',
-        routes: {
-            getInstalls: '{{ route('wptoolkit.get-installs') }}',
-            getCredentials: '{{ route('wptoolkit.get-credentials') }}',
-            wpLogin: '{{ route('wptoolkit.wp-login') }}',
-            resetPassword: '{{ route('wptoolkit.reset-password') }}',
-            testLogin: '{{ route('wptoolkit.test-login') }}'
-        }
-     })">
+     x-data="wpToolkit(wpToolkitConfig('wptoolkit-account-config-{{ $server->id }}-{{ $account->id }}'))">
 
     {{-- Section Header (entire header is clickable for expand/collapse) --}}
     <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between cursor-pointer select-none" @click="wpOpen = !wpOpen">
