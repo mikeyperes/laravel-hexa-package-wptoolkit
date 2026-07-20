@@ -5,6 +5,7 @@ namespace hexa_package_wptoolkit\Services\Concerns\WpCli;
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
 use Illuminate\Support\Facades\Cache;
+use phpseclib3\Net\SFTP;
 use phpseclib3\Net\SSH2;
 
 trait SupportsWpCliConnections
@@ -92,6 +93,85 @@ trait SupportsWpCliConnections
         $this->installInfoCache[$cacheKey] = $parsed;
 
         return rtrim($fullPath, '/');
+    }
+
+    protected function transferLocalFileToWpCliServer(
+        WhmServer $server,
+        SSH2|LocalShellConnection $connection,
+        string $sourcePath,
+        string $targetPath,
+    ): ?string {
+        if (!is_file($sourcePath) || !is_readable($sourcePath)) {
+            return 'Local source file does not exist or is not readable.';
+        }
+
+        $expectedBytes = (int) filesize($sourcePath);
+        if ($expectedBytes <= 0) {
+            return 'Local source file is empty.';
+        }
+
+        if ($connection instanceof LocalShellConnection) {
+            $targetDirectory = dirname($targetPath);
+            if (!is_dir($targetDirectory) && !@mkdir($targetDirectory, 0755, true) && !is_dir($targetDirectory)) {
+                return 'Could not create the local WordPress staging directory.';
+            }
+            if (!@copy($sourcePath, $targetPath)) {
+                $error = error_get_last();
+
+                return 'Local file copy failed: ' . (string) ($error['message'] ?? 'unknown error');
+            }
+            @chmod($targetPath, 0644);
+            $actualBytes = is_file($targetPath) ? (int) filesize($targetPath) : 0;
+
+            return $actualBytes === $expectedBytes
+                ? null
+                : "Local staged file size mismatch: expected {$expectedBytes}, received {$actualBytes}.";
+        }
+
+        $sftpResult = $this->sftpConnect($server);
+        if (!($sftpResult['success'] ?? false) || !($sftpResult['connection'] ?? null) instanceof SFTP) {
+            return (string) ($sftpResult['error'] ?? 'SFTP connection failed.');
+        }
+
+        /** @var SFTP $sftp */
+        $sftp = $sftpResult['connection'];
+        try {
+            if (!$sftp->put($targetPath, $sourcePath, SFTP::SOURCE_LOCAL_FILE)) {
+                $errors = method_exists($sftp, 'getSFTPErrors') ? (array) $sftp->getSFTPErrors() : [];
+                $details = trim(implode('; ', array_map('strval', $errors)));
+
+                return 'SFTP upload failed' . ($details !== '' ? ': ' . $details : '.');
+            }
+
+            $actualBytes = (int) $sftp->filesize($targetPath);
+            if ($actualBytes !== $expectedBytes) {
+                $sftp->delete($targetPath);
+
+                return "SFTP staged file size mismatch: expected {$expectedBytes}, received {$actualBytes}.";
+            }
+
+            if (!$sftp->chmod(0644, $targetPath)) {
+                $sftp->delete($targetPath);
+
+                return 'SFTP upload completed, but file permissions could not be applied.';
+            }
+
+            return null;
+        } catch (\Throwable $exception) {
+            try {
+                $sftp->delete($targetPath);
+            } catch (\Throwable) {
+                // Best effort cleanup only.
+            }
+
+            return 'SFTP upload failed: ' . $exception->getMessage();
+        } finally {
+            try {
+                $sftp->disconnect();
+            } catch (\Throwable) {
+                // Best effort cleanup only.
+            }
+        }
     }
 
     protected function stageWpCliTempFile(SSH2|LocalShellConnection $connection, string $path, string $contents): ?string

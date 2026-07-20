@@ -11,6 +11,7 @@ use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
 use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
+use phpseclib3\Net\SFTP;
 use phpseclib3\Net\SSH2;
 use phpseclib3\Crypt\PublicKeyLoader;
 
@@ -175,63 +176,106 @@ trait ManagesWpToolkitConnections
      */
     protected function sshConnect(WhmServer $server): array
     {
+        return $this->connectRemoteTransport($server, false);
+    }
+
+    /**
+     * Establish an authenticated SFTP connection for cross-server file transfer.
+     *
+     * @return array{success: bool, connection?: SFTP, error?: string}
+     */
+    protected function sftpConnect(WhmServer $server): array
+    {
+        return $this->connectRemoteTransport($server, true);
+    }
+
+    /**
+     * Build and authenticate a remote command or file-transfer transport.
+     *
+     * @return array{success: bool, connection?: SSH2|SFTP, error?: string}
+     */
+    private function connectRemoteTransport(WhmServer $server, bool $fileTransfer): array
+    {
         $hostname = $server->hostname;
-        $port = config('wptoolkit.ssh.port', 22);
+        $port = (int) config('wptoolkit.ssh.port', 22);
         $timeout = $this->commandTimeoutSeconds();
         $connectTimeout = max(10, min($timeout, 30));
         $username = $server->ssh_admin_username ?: $server->username ?: 'root';
+        $transport = $fileTransfer ? 'SFTP' : 'SSH';
 
         $this->generic->log('info', '[WpToolkit] Remote connecting', [
-            'hostname'    => $hostname,
-            'port'        => $port,
-            'username'    => $username,
+            'hostname' => $hostname,
+            'port' => $port,
+            'username' => $username,
+            'transport' => strtolower($transport),
             'has_ssh_key' => !empty($server->ssh_private_key),
         ]);
 
         try {
-            $ssh = new SSH2($hostname, $port, $connectTimeout);
-            $ssh->setTimeout($timeout);
+            $connection = $fileTransfer
+                ? new SFTP($hostname, $port, $connectTimeout)
+                : new SSH2($hostname, $port, $connectTimeout);
+            $connection->setTimeout($timeout);
 
-            // Try SSH key first
-            if (!empty($server->ssh_private_key)) {
-                try {
-                    $key = PublicKeyLoader::load(
-                        $server->ssh_private_key,
-                        $server->ssh_key_passphrase ?: false
-                    );
-                    if ($ssh->login($username, $key)) {
-                        $this->generic->log('info', '[WpToolkit] Remote key auth succeeded');
-                        return ['success' => true, 'connection' => $ssh];
-                    }
-                } catch (\Exception $e) {
-                    $this->generic->log('warning', '[WpToolkit] Remote key auth failed', [
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+            if ($this->authenticateRemoteTransport($connection, $server, $username, $transport)) {
+                return ['success' => true, 'connection' => $connection];
             }
 
-            // Try password
-            if (!empty($server->ssh_admin_password)) {
-                if ($ssh->login($username, $server->ssh_admin_password)) {
-                    $this->generic->log('info', '[WpToolkit] Remote password auth succeeded');
-                    return ['success' => true, 'connection' => $ssh];
-                }
+            try {
+                $connection->disconnect();
+            } catch (\Throwable) {
+                // Best effort cleanup only.
             }
 
             return [
                 'success' => false,
-                'error'   => "Remote auth failed for {$username}@{$hostname}:{$port}. No valid credentials.",
+                'error' => "{$transport} auth failed for {$username}@{$hostname}:{$port}. No valid credentials.",
             ];
-        } catch (\Exception $e) {
-            $this->generic->log('error', '[WpToolkit] WP Toolkit connection failed', [
+        } catch (\Throwable $exception) {
+            $this->generic->log('error', '[WpToolkit] Remote connection failed', [
                 'hostname' => $hostname,
-                'error'    => $e->getMessage(),
+                'transport' => strtolower($transport),
+                'error' => $exception->getMessage(),
             ]);
+
             return [
                 'success' => false,
-                'error'   => 'WP Toolkit connection failed: ' . $e->getMessage(),
+                'error' => "{$transport} connection failed: " . $exception->getMessage(),
             ];
         }
+    }
+
+    private function authenticateRemoteTransport(
+        SSH2 $connection,
+        WhmServer $server,
+        string $username,
+        string $transport,
+    ): bool {
+        if (!empty($server->ssh_private_key)) {
+            try {
+                $key = PublicKeyLoader::load(
+                    $server->ssh_private_key,
+                    $server->ssh_key_passphrase ?: false,
+                );
+                if ($connection->login($username, $key)) {
+                    $this->generic->log('info', "[WpToolkit] Remote {$transport} key auth succeeded");
+
+                    return true;
+                }
+            } catch (\Throwable $exception) {
+                $this->generic->log('warning', "[WpToolkit] Remote {$transport} key auth failed", [
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        if (!empty($server->ssh_admin_password) && $connection->login($username, $server->ssh_admin_password)) {
+            $this->generic->log('info', "[WpToolkit] Remote {$transport} password auth succeeded");
+
+            return true;
+        }
+
+        return false;
     }
 
     protected function localConnect(WhmServer $server): array

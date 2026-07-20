@@ -354,31 +354,55 @@ public function wpCliImportLocalMediaFile(WhmServer $server, int $installId, str
         $tmpDir = rtrim($installPath, "/") . "/.hexa-import-" . uniqid();
         $tmpFile = $tmpDir . "/" . $targetFilename;
 
-        $stageCommand = "mkdir -p " . escapeshellarg($tmpDir)
-            . " && test -r " . escapeshellarg($sourcePath)
-            . " && cp -f " . escapeshellarg($sourcePath) . " " . escapeshellarg($tmpFile)
-            . " && chmod 644 " . escapeshellarg($tmpFile)
-            . " 2>&1";
-        $copy = $this->runCommandWithExitCode(
+        $mkdir = $this->runCommandWithExitCode(
             $connection,
-            $this->localFilesystemCommand($connection, $stageCommand)
+            $this->localFilesystemCommand(
+                $connection,
+                "mkdir -p " . escapeshellarg($tmpDir) . " && chmod 755 " . escapeshellarg($tmpDir) . " 2>&1",
+            ),
         );
-        $fileSize = trim($this->execWithConnection(
+        if (($mkdir["exit_code"] ?? 1) !== 0) {
+            $cleanOutput = $mkdir["clean_output"] ?: $mkdir["raw_output"];
+
+            return [
+                "success" => false,
+                "message" => "Could not create the WordPress media staging directory: "
+                    . \Illuminate\Support\Str::limit($cleanOutput ?: "directory creation failed", 300),
+            ];
+        }
+
+        $stageError = $this->transferLocalFileToWpCliServer($server, $connection, $sourcePath, $tmpFile);
+        $expectedBytes = (int) filesize($sourcePath);
+        $remoteBytes = (int) trim($this->execWithConnection(
             $connection,
-            $this->localFilesystemCommand($connection, "stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0")
+            $this->localFilesystemCommand(
+                $connection,
+                "stat -c%s " . escapeshellarg($tmpFile) . " 2>/dev/null || echo 0",
+            ),
         ));
 
-        if (($copy["exit_code"] ?? 1) !== 0 || !$fileSize || $fileSize === "0") {
-            $this->execWithConnection($connection, $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)));
-            $cleanOutput = $copy["clean_output"] ?: $copy["raw_output"];
+        if ($stageError !== null || $remoteBytes !== $expectedBytes) {
+            $this->execWithConnection(
+                $connection,
+                $this->localFilesystemCommand($connection, "rm -rf " . escapeshellarg($tmpDir)),
+            );
+            $failure = $stageError
+                ?: "Staged file size mismatch: expected {$expectedBytes}, received {$remoteBytes}.";
             $this->generic->log("error", "[WpToolkit] Local media staging failed", [
                 "source_path" => $sourcePath,
                 "install_path" => $installPath,
                 "tmp_file" => $tmpFile,
-                "exit_code" => $copy["exit_code"] ?? null,
-                "output" => $cleanOutput,
+                "expected_bytes" => $expectedBytes,
+                "remote_bytes" => $remoteBytes,
+                "connection_mode" => $connection instanceof LocalShellConnection ? "local" : "remote",
+                "output" => $failure,
             ]);
-            return ["success" => false, "message" => "Could not stage the media file for the local WordPress import: " . \Illuminate\Support\Str::limit($cleanOutput ?: "copy failed", 300)];
+
+            return [
+                "success" => false,
+                "message" => "Could not stage the media file for the WordPress import: "
+                    . \Illuminate\Support\Str::limit($failure, 300),
+            ];
         }
 
         $titleArg = $filename ? " --title=" . escapeshellarg(pathinfo($filename, PATHINFO_FILENAME)) : "";
