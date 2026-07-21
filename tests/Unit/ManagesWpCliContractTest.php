@@ -16,4 +16,17 @@ class ManagesWpCliContractTest extends TestCase
         $this->assertTrue($method->isPublic());
         $this->assertSame('int', (string) $method->getReturnType());
     }
+
+    public function test_plugin_loaded_eval_is_part_of_the_public_wp_cli_contract(): void
+    {
+        $method = new ReflectionMethod(ManagesWpCli::class, 'wpCliEvalWithPlugins');
+
+        $this->assertTrue($method->isPublic());
+        $this->assertSame(4, $method->getNumberOfParameters());
+
+        $source = file_get_contents(dirname(__DIR__, 2) . '/src/Services/Concerns/WpCli/SupportsWpCliConnections.php');
+        $this->assertIsString($source);
+        $this->assertStringContainsString(' --allow-root eval "$CODE" 2>&1', $source);
+        $this->assertStringContainsString('resolveDirectWpCliBinary', $source);
+    }
 }
