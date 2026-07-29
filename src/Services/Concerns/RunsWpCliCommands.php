@@ -157,4 +157,59 @@ trait RunsWpCliCommands
             'lines' => $lines,
         ];
     }
+
+    protected function extractJsonObjectFromOutput(string $output): ?array
+    {
+        $length = strlen($output);
+
+        for ($start = 0; $start < $length; $start++) {
+            if ($output[$start] !== '{') {
+                continue;
+            }
+
+            $depth = 0;
+            $inString = false;
+            $escaped = false;
+
+            for ($end = $start; $end < $length; $end++) {
+                $character = $output[$end];
+
+                if ($inString) {
+                    if ($escaped) {
+                        $escaped = false;
+                    } elseif ($character === '\\') {
+                        $escaped = true;
+                    } elseif ($character === '"') {
+                        $inString = false;
+                    }
+                    continue;
+                }
+
+                if ($character === '"') {
+                    $inString = true;
+                    continue;
+                }
+                if ($character === '{') {
+                    $depth++;
+                    continue;
+                }
+                if ($character !== '}') {
+                    continue;
+                }
+
+                $depth--;
+                if ($depth !== 0) {
+                    continue;
+                }
+
+                $decoded = json_decode(substr($output, $start, $end - $start + 1), true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+                break;
+            }
+        }
+
+        return null;
+    }
 }

@@ -391,10 +391,6 @@ PHP;
             return ['success' => false, 'message' => 'Post ID is required.', 'term_ids' => [], 'term_taxonomy_ids' => []];
         }
 
-        if ($termIds === []) {
-            return ['success' => true, 'message' => 'No terms to assign.', 'term_ids' => [], 'term_taxonomy_ids' => []];
-        }
-
         $php = '$postId = ' . (int) $postId . ';'
             . '$taxonomy = ' . var_export($taxonomy, true) . ';'
             . '$termIds = ' . var_export($termIds, true) . ';'
@@ -411,7 +407,8 @@ PHP;
             . 'if (is_wp_error($confirmed)) { $confirmed = []; }'
             . '$termTaxonomyIds = array_values(array_map("intval", is_array($assigned) ? $assigned : []));'
             . '$confirmedIds = array_values(array_map("intval", is_array($confirmed) ? $confirmed : []));'
-            . 'echo "HEXA_ASSIGN_TERMS:" . wp_json_encode(["success" => true, "message" => "Assigned terms to " . $taxonomy . ".", "term_ids" => $confirmedIds, "term_taxonomy_ids" => $termTaxonomyIds]);';
+            . '$message = $termIds === [] ? "Cleared terms from " . $taxonomy . "." : "Assigned terms to " . $taxonomy . ".";'
+            . 'echo "HEXA_ASSIGN_TERMS:" . wp_json_encode(["success" => true, "message" => $message, "term_ids" => $confirmedIds, "term_taxonomy_ids" => $termTaxonomyIds]);';
 
         $result = $this->wpCliEval($server, $installId, $php);
         if (!($result['success'] ?? false)) {
