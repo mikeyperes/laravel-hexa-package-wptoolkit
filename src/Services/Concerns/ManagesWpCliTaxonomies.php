@@ -410,7 +410,10 @@ PHP;
             . '$message = $termIds === [] ? "Cleared terms from " . $taxonomy . "." : "Assigned terms to " . $taxonomy . ".";'
             . 'echo "HEXA_ASSIGN_TERMS:" . wp_json_encode(["success" => true, "message" => $message, "term_ids" => $confirmedIds, "term_taxonomy_ids" => $termTaxonomyIds]);';
 
-        $result = $this->wpCliEval($server, $installId, $php);
+        $result = $this->wpCliEvalWithPlugins($server, $installId, $php, 120);
+        if (!($result['success'] ?? false)) {
+            $result = $this->wpCliEval($server, $installId, $php, 120);
+        }
         if (!($result['success'] ?? false)) {
             return [
                 'success' => false,
