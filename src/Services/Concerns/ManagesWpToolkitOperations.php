@@ -6,6 +6,152 @@ use hexa_package_whm\Models\WhmServer;
 
 trait ManagesWpToolkitOperations
 {
+    /**
+     * Inspect an installed WordPress plugin without changing it.
+     *
+     * @return array<string, mixed>
+     */
+    public function getPluginStatus(WhmServer $server, int $installId, string $pluginSlug): array
+    {
+        $pluginSlug = trim($pluginSlug, " \t\n\r\0\x0B/");
+        if ($installId < 1) {
+            return ['success' => false, 'message' => 'A valid WP Toolkit install ID is required.'];
+        }
+        if ($pluginSlug === '' || !preg_match('/^[a-z0-9][a-z0-9._-]*$/i', $pluginSlug)) {
+            return ['success' => false, 'message' => 'A valid WordPress.org plugin slug is required.'];
+        }
+
+        $ssh = $this->getConnection($server);
+        if (!($ssh['success'] ?? false)) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed.'];
+        }
+
+        $connection = $ssh['connection'];
+        $base = $this->wpCliBaseCommand($server, $connection, $installId);
+        $slug = escapeshellarg($pluginSlug);
+        $installed = $this->runCommandWithExitCode($connection, "{$base} plugin is-installed {$slug} 2>&1");
+
+        if ((int) ($installed['exit_code'] ?? 1) !== 0) {
+            return [
+                'success' => true,
+                'message' => "Plugin {$pluginSlug} is not installed.",
+                'installed' => false,
+                'active' => false,
+                'plugin' => null,
+            ];
+        }
+
+        $active = $this->runCommandWithExitCode($connection, "{$base} plugin is-active {$slug} 2>&1");
+        $details = $this->runCommandWithExitCode($connection, "{$base} plugin get {$slug} --format=json 2>&1");
+        $plugin = json_decode((string) ($details['clean_output'] ?? ''), true);
+
+        return [
+            'success' => true,
+            'message' => "Plugin {$pluginSlug} is installed" . ((int) ($active['exit_code'] ?? 1) === 0 ? ' and active.' : ' but inactive.'),
+            'installed' => true,
+            'active' => (int) ($active['exit_code'] ?? 1) === 0,
+            'plugin' => is_array($plugin) ? $plugin : ['slug' => $pluginSlug],
+        ];
+    }
+
+    /**
+     * Idempotently install a WordPress.org plugin and ensure it is active.
+     * Existing plugin files are preserved; this method does not force an update.
+     *
+     * @return array<string, mixed>
+     */
+    public function ensurePluginInstalledAndActive(
+        WhmServer $server,
+        int $installId,
+        string $pluginSlug,
+        ?string $version = null,
+    ): array {
+        $pluginSlug = trim($pluginSlug, " \t\n\r\0\x0B/");
+        $version = trim((string) $version);
+        if ($installId < 1) {
+            return ['success' => false, 'message' => 'A valid WP Toolkit install ID is required.', 'steps' => []];
+        }
+        if ($pluginSlug === '' || !preg_match('/^[a-z0-9][a-z0-9._-]*$/i', $pluginSlug)) {
+            return ['success' => false, 'message' => 'A valid WordPress.org plugin slug is required.', 'steps' => []];
+        }
+        if ($version !== '' && !preg_match('/^[A-Za-z0-9._-]+$/', $version)) {
+            return ['success' => false, 'message' => 'Plugin version contains unsupported characters.', 'steps' => []];
+        }
+
+        $ssh = $this->getConnection($server);
+        if (!($ssh['success'] ?? false)) {
+            return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed.', 'steps' => []];
+        }
+
+        $connection = $ssh['connection'];
+        $base = $this->wpCliBaseCommand($server, $connection, $installId);
+        $slug = escapeshellarg($pluginSlug);
+        $steps = [];
+        $initial = $this->runCommandWithExitCode($connection, "{$base} plugin is-installed {$slug} 2>&1");
+        $wasInstalled = (int) ($initial['exit_code'] ?? 1) === 0;
+
+        if (!$wasInstalled) {
+            $command = "{$base} plugin install {$slug}";
+            if ($version !== '') {
+                $command .= ' --version=' . escapeshellarg($version);
+            }
+            $install = $this->runCommandWithExitCode($connection, $command . ' 2>&1');
+            $steps[] = [
+                'action' => 'install',
+                'success' => (int) ($install['exit_code'] ?? 1) === 0,
+                'output' => (string) ($install['clean_output'] ?? ''),
+            ];
+            if ((int) ($install['exit_code'] ?? 1) !== 0) {
+                return [
+                    'success' => false,
+                    'message' => "Failed to install WordPress plugin {$pluginSlug}.",
+                    'installed' => false,
+                    'active' => false,
+                    'steps' => $steps,
+                ];
+            }
+        } else {
+            $steps[] = ['action' => 'install', 'success' => true, 'output' => 'Plugin was already installed.'];
+        }
+
+        $activeCheck = $this->runCommandWithExitCode($connection, "{$base} plugin is-active {$slug} 2>&1");
+        $wasActive = (int) ($activeCheck['exit_code'] ?? 1) === 0;
+        if (!$wasActive) {
+            $activation = $this->runCommandWithExitCode($connection, "{$base} plugin activate {$slug} 2>&1");
+            $steps[] = [
+                'action' => 'activate',
+                'success' => (int) ($activation['exit_code'] ?? 1) === 0,
+                'output' => (string) ($activation['clean_output'] ?? ''),
+            ];
+            if ((int) ($activation['exit_code'] ?? 1) !== 0) {
+                return [
+                    'success' => false,
+                    'message' => "Plugin {$pluginSlug} was installed but activation failed.",
+                    'installed' => true,
+                    'active' => false,
+                    'steps' => $steps,
+                ];
+            }
+        } else {
+            $steps[] = ['action' => 'activate', 'success' => true, 'output' => 'Plugin was already active.'];
+        }
+
+        $details = $this->runCommandWithExitCode($connection, "{$base} plugin get {$slug} --format=json 2>&1");
+        $plugin = json_decode((string) ($details['clean_output'] ?? ''), true);
+
+        return [
+            'success' => true,
+            'message' => $wasInstalled && $wasActive
+                ? "Plugin {$pluginSlug} was already installed and active."
+                : "Plugin {$pluginSlug} is installed and active.",
+            'installed' => true,
+            'active' => true,
+            'changed' => !$wasInstalled || !$wasActive,
+            'plugin' => is_array($plugin) ? $plugin : ['slug' => $pluginSlug],
+            'steps' => $steps,
+        ];
+    }
+
     public function getInstallInfo(WhmServer $server, int $installId): array
     {
         $ssh = $this->getConnection($server);

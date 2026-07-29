@@ -20,6 +20,8 @@ class WpToolkitArchitectureTest extends TestCase
             "installWordpress",
             "removeInstall",
             "registerInstall",
+            "getPluginStatus",
+            "ensurePluginInstalledAndActive",
             "syncPluginFromGitHub",
             "wpCliRaw",
         ] as $method) {
