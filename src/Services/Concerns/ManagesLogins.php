@@ -26,6 +26,26 @@ trait ManagesLogins
      */
     public function generateWordPressLoginUrl(WhmServer $server, string $wpPath, string $username, string $wpUser, string $siteUrl, string $redirectPath = ''): array
     {
+        $wpPath = rtrim(trim($wpPath), '/');
+        $username = strtolower(trim($username));
+        $siteUrl = rtrim(trim($siteUrl), '/');
+        if (
+            preg_match('/\A[a-z][a-z0-9_]{0,15}\z/', $username) !== 1
+            || !str_starts_with($wpPath.'/', '/home/'.$username.'/')
+        ) {
+            return [
+                'success' => false,
+                'error' => 'The WordPress install must use an absolute path inside its cPanel account.',
+            ];
+        }
+        if (
+            filter_var($siteUrl, FILTER_VALIDATE_URL) === false
+            || strtolower((string) parse_url($siteUrl, PHP_URL_SCHEME)) !== 'https'
+            || (string) parse_url($siteUrl, PHP_URL_HOST) === ''
+        ) {
+            return ['success' => false, 'error' => 'A valid HTTPS WordPress site URL is required.'];
+        }
+
         $this->generic->log('info', '[WpToolkit] generateWordPressLoginUrl', [
             'server'  => $server->name,
             'wp_path' => $wpPath,
@@ -54,9 +74,11 @@ add_action('init', function() {
     $token = '__TOKEN__';
     $expiry = __EXPIRY__;
     $wp_user = '__WP_USER__';
-    if ($_GET['hws_login_token'] !== $token || time() > $expiry) {
+    $provided_token = (string) wp_unslash($_GET['hws_login_token']);
+    if (!hash_equals($token, $provided_token)) return;
+    if (time() > $expiry) {
         @unlink(__FILE__);
-        wp_die('Login link expired or invalid.');
+        wp_die('Login link expired.');
     }
     $user = get_user_by('login', $wp_user);
     if (!$user) { @unlink(__FILE__); wp_die('User not found.'); }
@@ -77,27 +99,44 @@ PHP;
         $muPlugin = str_replace('__REDIRECT__', addslashes($safeRedirect), $muPlugin);
 
         $b64 = base64_encode($muPlugin);
-        $escapedPath = escapeshellarg($wpPath);
         $escapedUser = escapeshellarg($username);
         $muDir = $wpPath . '/wp-content/mu-plugins';
-        $filePath = $muDir . '/hws-auto-login.php';
+        $filePath = $muDir . '/hws-auto-login-' . substr(hash('sha256', $token), 0, 20) . '.php';
         $escapedFile = escapeshellarg($filePath);
 
-        $cmd = "mkdir -p " . escapeshellarg($muDir) . " && echo '{$b64}' | base64 -d > {$escapedFile} && chown {$escapedUser}:{$escapedUser} {$escapedFile} && chmod 644 {$escapedFile} && echo 'MU_PLUGIN_OK'";
+        $cmd = "mkdir -p " . escapeshellarg($muDir)
+            . " && printf %s " . escapeshellarg($b64) . " | base64 -d > {$escapedFile}"
+            . " && chown {$escapedUser}:{$escapedUser} {$escapedFile}"
+            . " && chmod 644 {$escapedFile}"
+            . " && test -s {$escapedFile}"
+            . " && echo 'MU_PLUGIN_OK'";
 
-        $output = trim($connection->exec($cmd));
-        $connection->disconnect();
+        try {
+            $write = $this->runCommandWithExitCode(
+                $connection,
+                $this->localFilesystemCommand($connection, $cmd)
+            );
+        } finally {
+            $this->disconnectCachedConnection($server, $connection);
+        }
+        $output = trim((string) ($write['clean_output'] ?? $write['raw_output'] ?? ''));
 
-        if (!str_contains($output, 'MU_PLUGIN_OK')) {
+        if (($write['exit_code'] ?? 1) !== 0 || !str_contains($output, 'MU_PLUGIN_OK')) {
+            $this->generic->log('error', '[WpToolkit] WordPress login bootstrap write failed', [
+                'site' => $siteUrl,
+                'wp_path' => $wpPath,
+                'exit_code' => $write['exit_code'] ?? null,
+                'output' => \Illuminate\Support\Str::limit($output, 300),
+            ]);
+
             return [
                 'success' => false,
-                'error'   => 'Failed to write mu-plugin: ' . mb_substr($output, 0, 300),
+                'error'   => 'Failed to write and verify the one-click login bootstrap.',
             ];
         }
 
-        // Use site root URL — the mu-plugin hooks into 'init' which fires on ANY page
-        // Do NOT use /wp-login.php since custom login URLs (e.g. /hexa-admin/) may block it
-        $loginUrl = rtrim($siteUrl, '/') . '/?hws_login_token=' . $token;
+        // admin-ajax is uncached and remains public when a custom wp-login slug is active.
+        $loginUrl = $siteUrl . '/wp-admin/admin-ajax.php?action=hws_auto_login&hws_login_token=' . $token;
 
         $this->generic->log('info', '[WpToolkit] WordPress login URL generated', [
             'site' => $siteUrl, 'wp_user' => $wpUser, 'ttl' => $ttl,
