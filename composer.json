@@ -5,6 +5,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
+        "hexawebsystems/laravel-hexa-package-browser-worker": "*",
         "hexawebsystems/laravel-hexa-package-whm": "*"
     },
     "autoload": {

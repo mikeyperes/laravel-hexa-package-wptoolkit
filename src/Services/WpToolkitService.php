@@ -6,6 +6,7 @@ use hexa_package_whm\Services\WhmService;
 use hexa_core\Services\GenericService;
 use hexa_package_wptoolkit\Services\Concerns\ManagesInstalls;
 use hexa_package_wptoolkit\Services\Concerns\ManagesCredentials;
+use hexa_package_wptoolkit\Services\Concerns\ManagesExternalAuthentication;
 use hexa_package_wptoolkit\Services\Concerns\ManagesLogins;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpCli;
 use hexa_package_wptoolkit\Services\Concerns\ManagesWpToolkitConnections;
@@ -30,6 +31,7 @@ class WpToolkitService
 {
     use ManagesInstalls;
     use ManagesCredentials;
+    use ManagesExternalAuthentication;
     use ManagesWpToolkitConnections;
     use ManagesWpToolkitOperations;
     use ProbesWpToolkitRuntime;

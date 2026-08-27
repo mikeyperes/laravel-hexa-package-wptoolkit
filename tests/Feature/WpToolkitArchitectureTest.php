@@ -16,6 +16,8 @@ class WpToolkitArchitectureTest extends TestCase
             "runtimeSettings",
             "inspectCommandRuntime",
             "getInstallInfo",
+            "bindExternalSiteAuthentication",
+            "externalAuthenticationDisposition",
             "cloneInstallSameServer",
             "installWordpress",
             "removeInstall",
@@ -35,6 +37,7 @@ class WpToolkitArchitectureTest extends TestCase
             "src/Services/Concerns/ResolvesWpToolkitRuntime.php",
             "src/Services/Concerns/ProbesWpToolkitRuntime.php",
             "src/Services/Concerns/ManagesWpToolkitOperations.php",
+            "src/Services/Concerns/ManagesExternalAuthentication.php",
             "src/Services/Concerns/RunsWpToolkitCommands.php",
         ] as $path) {
             $this->assertLessThan(700, count(file($root . "/" . $path, FILE_IGNORE_NEW_LINES)), $path);
