@@ -264,47 +264,49 @@ trait ManagesWpCliPosts
      */
     public function wpCliGetPost(WhmServer $server, int $installId, int $postId): array
     {
-        $ssh = $this->getConnection($server);
-        if (!$ssh['success']) {
-            return ['success' => false, 'message' => $ssh['error'] ?? 'WP Toolkit connection failed'];
-        }
+        $php = '$post = get_post(' . $postId . '); '
+            . 'if (!$post) { echo "HEXA_POST_DETAILS:" . base64_encode("null"); return; } '
+            . '$author = get_userdata((int) $post->post_author); '
+            . '$payload = ['
+            . '"post_id" => (int) $post->ID, '
+            . '"post_url" => get_permalink($post), '
+            . '"post_status" => (string) $post->post_status, '
+            . '"post_title" => (string) $post->post_title, '
+            . '"post_date" => (string) $post->post_date, '
+            . '"author_id" => (int) $post->post_author, '
+            . '"author_name" => $author ? (string) $author->display_name : "", '
+            . '"post_content" => (string) $post->post_content, '
+            . ']; '
+            . 'echo "HEXA_POST_DETAILS:" . base64_encode(wp_json_encode($payload));';
 
-        $connection = $ssh['connection'];
-        $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
-        $cmd = "{$wpCliBase} post get " . escapeshellarg((string) $postId) . ' --format=json 2>&1';
-        $output = trim($this->execWithConnection($connection, $cmd));
-        $jsonPayload = $output;
-        $jsonStart = strpos($output, '{');
-        $jsonEnd = strrpos($output, '}');
-        if ($jsonStart !== false && $jsonEnd !== false && $jsonEnd >= $jsonStart) {
-            $jsonPayload = substr($output, $jsonStart, $jsonEnd - $jsonStart + 1);
-        }
-        $json = json_decode($jsonPayload, true);
+        $result = $this->wpCliEval($server, $installId, $php);
+        $output = trim((string) ($result['stdout'] ?? ''));
 
-        if (!is_array($json) || empty($json['ID'])) {
+        if (!preg_match('~HEXA_POST_DETAILS:([A-Za-z0-9+/=]+)~', $output, $matches)) {
             $this->generic->log('error', '[WpToolkit] wpCliGetPost failed', ['output' => $output, 'post_id' => $postId]);
             return ['success' => false, 'message' => 'wp-cli post get failed: ' . \Illuminate\Support\Str::limit($output, 300)];
         }
 
-        $authorId = isset($json["post_author"]) ? (int) $json["post_author"] : null;
-        $authorName = "";
-        if ($authorId) {
-            $authorCmd = $wpCliBase . " user get " . escapeshellarg((string) $authorId) . " --field=display_name 2>/dev/null";
-            $authorName = trim($this->execWithConnection($connection, $authorCmd));
+        $decoded = base64_decode($matches[1], true);
+        $json = is_string($decoded) ? json_decode($decoded, true) : null;
+
+        if (!is_array($json) || empty($json['post_id'])) {
+            $this->generic->log('error', '[WpToolkit] wpCliGetPost returned invalid data', ['output' => $output, 'post_id' => $postId]);
+            return ['success' => false, 'message' => 'wp-cli post get returned invalid data.'];
         }
 
         return [
             'success' => true,
             'message' => "Post fetched (ID: {$postId})",
             'data' => [
-                'post_id' => (int) ($json['ID'] ?? $postId),
-                'post_url' => $json['url'] ?? null,
+                'post_id' => (int) ($json['post_id'] ?? $postId),
+                'post_url' => $json['post_url'] ?? null,
                 'post_status' => $json['post_status'] ?? null,
                 'post_title' => $json['post_title'] ?? '',
                 'post_date' => $json['post_date'] ?? null,
-                "author_id" => $authorId,
-                "author_name" => $authorName,
-                "post_content" => (string) ($json["post_content"] ?? ""),
+                'author_id' => isset($json['author_id']) ? (int) $json['author_id'] : null,
+                'author_name' => (string) ($json['author_name'] ?? ''),
+                'post_content' => (string) ($json['post_content'] ?? ''),
             ],
         ];
     }

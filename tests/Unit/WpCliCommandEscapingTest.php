@@ -22,6 +22,21 @@ class WpCliCommandEscapingTest extends TestCase
         $this->assertStringContainsString('-- eval "$CODE" 2>&1', $harness->commands[0]);
     }
 
+    public function test_wp_cli_eval_preserves_a_nonzero_exit_status(): void
+    {
+        $harness = new WpCliHarness();
+        $harness->forcedExitCode = 1;
+        $harness->forcedOutput = 'Fatal error: database global is unavailable';
+        $server = new WhmServer();
+
+        $result = $harness->wpCliEval($server, 44, 'global $wpdb;');
+
+        $this->assertFalse($result['success']);
+        $this->assertSame(1, $result['exit_code']);
+        $this->assertSame($harness->forcedOutput, $result['stdout']);
+        $this->assertStringContainsString('WP-CLI eval failed', $result['message']);
+    }
+
     public function test_wp_cli_create_post_uses_a_staged_tag_eval_file(): void
     {
         $harness = new WpCliHarness();
@@ -56,6 +71,10 @@ class WpCliHarness
      * @var array<int, string>
      */
     public array $commands = [];
+
+    public int $forcedExitCode = 0;
+
+    public string $forcedOutput = 'Success: ok';
 
     public object $generic;
 
@@ -93,7 +112,7 @@ class WpCliHarness
         $this->commands[] = $command;
 
         if (str_contains($command, '__HEXA_CMD_EXIT__')) {
-            return "Success: ok\n__HEXA_CMD_EXIT__:0";
+            return $this->forcedOutput . "\n__HEXA_CMD_EXIT__:" . $this->forcedExitCode;
         }
 
         if (str_contains($command, '-- post create')) {

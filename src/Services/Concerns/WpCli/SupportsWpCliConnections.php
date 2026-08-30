@@ -367,9 +367,21 @@ trait SupportsWpCliConnections
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $b64 = base64_encode($php);
-        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
-        $out = trim($this->execWithConnection($connection, $cmd));
-        return ['success' => true, 'stdout' => $out];
+        $cmd = 'CODE=$(printf %s ' . escapeshellarg($b64) . ' | base64 -d) && '
+            . $wpCliBase . ' eval "$CODE" 2>&1';
+        $result = $this->runCommandWithExitCode($connection, $cmd);
+        $out = trim((string) ($result['clean_output'] ?: $result['raw_output']));
+        $exitCode = $result['exit_code'] ?? null;
+        $success = $exitCode === 0;
+
+        return [
+            'success' => $success,
+            'stdout' => $out,
+            'message' => $success
+                ? 'WP-CLI eval completed.'
+                : 'WP-CLI eval failed: ' . \Illuminate\Support\Str::limit($out ?: 'unknown error', 300),
+            'exit_code' => $exitCode,
+        ];
     }
     // ===== code-side unique methods (preserved during 3-way merge) =====
 
