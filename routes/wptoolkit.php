@@ -3,7 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use hexa_package_wptoolkit\Http\Controllers\WpToolkitDashboardController;
 
-Route::middleware(['web', 'auth', 'locked', 'system_lock', 'role'])->group(function () {
+Route::middleware(['web', 'auth', 'locked', 'system_lock', 'two_factor', 'role'])->group(function () {
     Route::get('wp-toolkit', [WpToolkitDashboardController::class, 'index'])->name('wptoolkit.index');
     Route::hexaRawPage('raw-wp-toolkit', [WpToolkitDashboardController::class, 'raw'], 'wptoolkit.raw', [
         'package' => 'wptoolkit',
