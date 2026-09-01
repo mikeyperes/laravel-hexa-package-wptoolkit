@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_core\Services\CredentialService;
+use hexa_package_browser_worker\Contracts\BrowserWorkerBridgeContract;
 use hexa_package_browser_worker\Domains\Config\BrowserWorkerConfigRepository;
 
 /**
@@ -164,19 +165,7 @@ trait ManagesExternalAuthentication
             return $this->externalAuthenticationReport($target, $profile, null, false, false);
         }
 
-        $stored = null;
-        try {
-            $raw = $this->externalCredentialService()->get(
-                $this->externalCredentialSlug((string) $profile['profile_id']),
-                'account',
-            );
-            if (is_string($raw) && $raw !== '') {
-                $decoded = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
-                $stored = is_array($decoded) ? $decoded : null;
-            }
-        } catch (\Throwable) {
-            $stored = null;
-        }
+        $stored = $this->externalStoredAuthentication((string) $profile['profile_id']);
 
         $usernamePresent = is_string($stored['username'] ?? null) && trim((string) $stored['username']) !== '';
         $passwordPresent = is_string($stored['password'] ?? null) && (string) $stored['password'] !== '';
@@ -195,6 +184,98 @@ trait ManagesExternalAuthentication
         );
     }
 
+    /**
+     * Authenticate one exact external WordPress site through its protected
+     * credential binding without returning credential values.
+     *
+     * @param  array<string, mixed>  $request
+     * @return array<string, mixed>
+     */
+    public function authenticateExternalSite(array $request): array
+    {
+        $report = $this->externalAuthenticationDisposition($request);
+        $report['operation'] = 'authenticate-external-site';
+        if (($report['login_credentials']['protected_handoff_ready'] ?? false) !== true) {
+            $report['success'] = false;
+
+            return $report;
+        }
+
+        $profileId = $report['site_account_data']['protected_browser_profile']['profile_id'] ?? null;
+        if (! is_string($profileId) || $profileId === '') {
+            return $this->externalAuthenticationFailure(
+                'The protected Browser Worker profile could not be resolved.',
+                'authenticate-external-site',
+            );
+        }
+        $stored = $this->externalStoredAuthentication($profileId);
+        if (! is_array($stored)
+            || ! is_string($stored['username'] ?? null)
+            || trim((string) $stored['username']) === ''
+            || ! is_string($stored['password'] ?? null)
+            || (string) $stored['password'] === '') {
+            return $this->externalAuthenticationFailure(
+                'The protected credential binding is no longer complete.',
+                'authenticate-external-site',
+            );
+        }
+
+        $bridge = $this->externalBrowserWorkerBridge();
+        $status = $bridge->status($profileId);
+        $state = is_array($status['data'] ?? null) ? $status['data'] : [];
+        if (($status['success'] ?? false) === true
+            && ($state['profile'] ?? null) === $profileId
+            && ($state['auth_verified'] ?? false) === true
+            && ($state['state'] ?? null) === 'AGENT_CONTROL') {
+            return $this->externalSuccessfulAuthenticationReport($report, $state);
+        }
+
+        $lease = is_array($state['lease'] ?? null) ? $state['lease'] : [];
+        $humanOwnerId = $lease['owner_id'] ?? null;
+        if (($state['state'] ?? null) !== 'HUMAN_CONTROL'
+            || ($lease['owner_type'] ?? null) !== 'human'
+            || ! is_string($humanOwnerId)
+            || preg_match('/^[A-Za-z0-9._:@-]{1,128}$/', $humanOwnerId) !== 1) {
+            $report['success'] = false;
+            $report['login_credentials']['validation_status'] = 'blocked';
+            $report['login_credentials']['blocker'] = 'The exact protected browser profile is not ready for an automatic login transition.';
+            $report['login_credentials']['next_action'] = 'Restore the exact profile ownership state, then retry protected authentication.';
+            $report['login_credentials']['approval_boundary'] = null;
+
+            return $report;
+        }
+
+        $result = $bridge->protectedLoginProfile(
+            $profileId,
+            $humanOwnerId,
+            'wp-toolkit-protected-login',
+            (string) $report['site_account_data']['wp_admin_url'],
+            (string) $stored['username'],
+            (string) $stored['password'],
+            ['Username or Email Address', 'Username'],
+            ['Password'],
+            ['Log In', 'Log in'],
+        );
+        $resultState = is_array($result['data'] ?? null) ? $result['data'] : [];
+        $resultLease = is_array($resultState['lease'] ?? null) ? $resultState['lease'] : [];
+        if (($result['success'] ?? false) !== true
+            || ($resultState['profile'] ?? null) !== $profileId
+            || ($resultState['auth_verified'] ?? false) !== true
+            || ($resultState['state'] ?? null) !== 'AGENT_CONTROL'
+            || ($resultLease['owner_type'] ?? null) !== 'agent'
+            || ($resultLease['owner_id'] ?? null) !== 'wp-toolkit-protected-login') {
+            $report['success'] = false;
+            $report['login_credentials']['validation_status'] = 'blocked';
+            $report['login_credentials']['blocker'] = 'Protected browser login did not produce verified authenticated evidence.';
+            $report['login_credentials']['next_action'] = 'Inspect the preserved exact-profile authentication state before retrying.';
+            $report['login_credentials']['approval_boundary'] = null;
+
+            return $report;
+        }
+
+        return $this->externalSuccessfulAuthenticationReport($report, $resultState);
+    }
+
     /** @return object */
     protected function externalCredentialService()
     {
@@ -205,6 +286,55 @@ trait ManagesExternalAuthentication
     protected function externalBrowserProfileRepository()
     {
         return app(BrowserWorkerConfigRepository::class);
+    }
+
+    /** @return object */
+    protected function externalBrowserWorkerBridge()
+    {
+        return app(BrowserWorkerBridgeContract::class);
+    }
+
+    /** @return array<string, mixed>|null */
+    protected function externalStoredAuthentication(string $profileId): ?array
+    {
+        try {
+            $raw = $this->externalCredentialService()->get(
+                $this->externalCredentialSlug($profileId),
+                'account',
+            );
+            if (! is_string($raw) || $raw === '') {
+                return null;
+            }
+            $decoded = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
+
+            return is_array($decoded) ? $decoded : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /** @param array<string, mixed> $report @param array<string, mixed> $state @return array<string, mixed> */
+    protected function externalSuccessfulAuthenticationReport(array $report, array $state): array
+    {
+        $checkpoint = is_array($state['checkpoint'] ?? null) ? $state['checkpoint'] : [];
+        $checkedAt = $checkpoint['auth_checked_at'] ?? $state['auth_checked_at'] ?? null;
+        $report['success'] = true;
+        $report['login_credentials']['validation_status'] = 'valid';
+        $report['login_credentials']['last_validated_utc'] = is_string($checkedAt) ? $checkedAt : now()->toIso8601String();
+        $report['login_credentials']['blocker'] = null;
+        $report['login_credentials']['next_action'] = 'Continue the authorized WordPress operation.';
+        $report['login_credentials']['approval_boundary'] = null;
+        $report['site_account_data']['authentication_disposition'] = 'authenticated';
+        $report['site_account_data']['browser_worker'] = [
+            'operation' => 'protected-login',
+            'state' => 'AGENT_CONTROL',
+            'auth_verified' => true,
+            'worker_package_version' => is_string($state['worker_package_version'] ?? null)
+                ? $state['worker_package_version']
+                : null,
+        ];
+
+        return $report;
     }
 
     /** @param array<string, mixed> $request @return array<string, mixed> */
@@ -404,9 +534,9 @@ trait ManagesExternalAuthentication
                 'protected_handoff_ready' => $ready,
                 'blocker' => $blocker,
                 'next_action' => $ready
-                    ? 'Attempt ordinary authentication through the exact protected browser profile.'
+                    ? 'Attempt ordinary authentication automatically through the exact protected browser profile.'
                     : 'Resolve the reported profile or credential binding blocker before authentication.',
-                'approval_boundary' => $ready ? 'Confirm protected WordPress login test?' : null,
+                'approval_boundary' => null,
             ],
             'site_account_data' => [
                 'source_mode' => 'external',

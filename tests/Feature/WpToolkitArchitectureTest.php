@@ -18,6 +18,7 @@ class WpToolkitArchitectureTest extends TestCase
             "getInstallInfo",
             "bindExternalSiteAuthentication",
             "externalAuthenticationDisposition",
+            "authenticateExternalSite",
             "cloneInstallSameServer",
             "installWordpress",
             "removeInstall",
