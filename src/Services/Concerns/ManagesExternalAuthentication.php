@@ -255,6 +255,7 @@ trait ManagesExternalAuthentication
             ['Username or Email Address', 'Username'],
             ['Password'],
             ['Log In', 'Log in'],
+            ['Log in with username and password'],
         );
         $resultState = is_array($result['data'] ?? null) ? $result['data'] : [];
         $resultLease = is_array($resultState['lease'] ?? null) ? $resultState['lease'] : [];
