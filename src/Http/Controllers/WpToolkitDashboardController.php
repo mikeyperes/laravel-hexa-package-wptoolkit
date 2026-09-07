@@ -7,6 +7,7 @@ use hexa_core\Models\Setting;
 use hexa_package_whm\Models\HostingAccount;
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Services\WpToolkitService;
+use hexa_package_wptoolkit\Support\WpToolkitInstallScope;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -34,16 +35,51 @@ class WpToolkitDashboardController extends Controller
     protected function authorizeAccountRequest(Request $request): HostingAccount
     {
         $account = HostingAccount::with('whmServer')
+            ->whereHas('whmServer')
             ->where('whm_server_id', (int) $request->input('server_id'))
             ->where('username', (string) $request->input('username'))
             ->firstOrFail();
 
         $accessService = 'hexa_app_code_portal\\Portal\\Terminal\\Support\\TerminalAccountAccessService';
         if (class_exists($accessService)) {
-            abort_unless(app($accessService)->canAccess(auth()->user(), (int) $account->id), 403);
+            abort_unless(app($accessService)->canAccess($request->user(), (int) $account->id), 403);
+        } else {
+            $this->authorizeAdministratorRequest($request);
         }
 
         return $account;
+    }
+
+    /**
+     * Resolve an installation only from the authorized account's live inventory.
+     * Client-provided paths and URLs are never trusted as operation targets.
+     *
+     * @return array{0: HostingAccount, 1: array<string, mixed>}
+     */
+    protected function authorizeInstallRequest(Request $request): array
+    {
+        $account = $this->authorizeAccountRequest($request);
+        $inventory = $this->wpToolkit->getInstallsForAccount($account->whmServer, $account->username);
+
+        abort_unless((bool) ($inventory['success'] ?? false), 502, 'Unable to verify the WordPress installation inventory.');
+
+        $install = WpToolkitInstallScope::resolve(
+            (array) ($inventory['installs'] ?? []),
+            (int) $request->input('install_id'),
+            (string) $account->username,
+        );
+
+        // A 404 does not reveal whether a foreign installation ID exists.
+        abort_unless($install !== null, 404, 'WordPress installation not found.');
+
+        return [$account, $install];
+    }
+
+    protected function authorizeAdministratorRequest(Request $request): void
+    {
+        $user = $request->user();
+
+        abort_unless($user && method_exists($user, 'isAdmin') && $user->isAdmin(), 403);
     }
 
     /**
@@ -51,8 +87,9 @@ class WpToolkitDashboardController extends Controller
      *
      * @return \Illuminate\View\View
      */
-    public function index()
+    public function index(Request $request)
     {
+        $this->authorizeAdministratorRequest($request);
         $servers = WhmServer::where('is_active', true)->get();
         $publishSites = collect();
 
@@ -101,8 +138,9 @@ class WpToolkitDashboardController extends Controller
      *
      * @return \Illuminate\View\View
      */
-    public function raw()
+    public function raw(Request $request)
     {
+        $this->authorizeAdministratorRequest($request);
         $servers = WhmServer::where('is_active', true)->get();
 
         return view('wptoolkit::raw.index', [
@@ -118,6 +156,8 @@ class WpToolkitDashboardController extends Controller
      */
     public function getAllInstalls(Request $request): JsonResponse
     {
+        $this->authorizeAdministratorRequest($request);
+
         $request->validate([
             'server_id' => 'required|integer|exists:whm_servers,id',
         ]);
@@ -162,7 +202,7 @@ class WpToolkitDashboardController extends Controller
     {
         $request->validate([
             'server_id'  => 'required|integer|exists:whm_servers,id',
-            'install_id' => 'required|integer',
+            'install_id' => 'required|integer|min:1',
             'username'   => 'required|string|max:255',
             'search'     => 'nullable|string|max:255',
             'mime_type'  => 'nullable|string|max:80',
@@ -170,11 +210,11 @@ class WpToolkitDashboardController extends Controller
             'per_page'   => 'nullable|integer|min:1|max:100',
         ]);
 
-        $account = $this->authorizeAccountRequest($request);
+        [$account, $install] = $this->authorizeInstallRequest($request);
 
         $result = $this->wpToolkit->wpCliMediaSelector(
             $account->whmServer,
-            (int) $request->input('install_id'),
+            (int) $install['id'],
             [
                 'search' => (string) $request->input('search', ''),
                 'mime_type' => (string) $request->input('mime_type', 'image'),
@@ -196,22 +236,24 @@ class WpToolkitDashboardController extends Controller
     {
         $request->validate([
             'server_id'  => 'required|integer|exists:whm_servers,id',
-            'install_id' => 'required|integer',
-            'wp_path'    => 'required|string',
+            'install_id' => 'required|integer|min:1',
             'username'   => 'required|string|max:255',
-            'login_url'  => 'nullable|string',
         ]);
 
-        $account = $this->authorizeAccountRequest($request);
-        $server = $account->whmServer;
+        [$account, $install] = $this->authorizeInstallRequest($request);
 
         $result = $this->wpToolkit->getCredentials(
-            $server,
-            (int) $request->input('install_id'),
-            $request->input('wp_path'),
+            $account->whmServer,
+            (int) $install['id'],
+            (string) $install['path'],
             $account->username,
-            $request->input('login_url')
+            isset($install['login_url']) ? (string) $install['login_url'] : null,
         );
+
+        unset($result['raw_output'], $result['debug_stored_creds']);
+        if (! ($request->user() && method_exists($request->user(), 'isAdmin') && $request->user()->isAdmin())) {
+            unset($result['db_credentials']);
+        }
 
         return response()->json($result);
     }
@@ -226,22 +268,20 @@ class WpToolkitDashboardController extends Controller
     {
         $request->validate([
             'server_id' => 'required|integer|exists:whm_servers,id',
-            'wp_path'   => 'required|string',
+            'install_id' => 'required|integer|min:1',
             'username'  => 'required|string|max:255',
             'wp_user'   => 'required|string|max:255',
-            'site_url'  => 'required|string',
             'redirect'  => 'nullable|string|max:255',
         ]);
 
-        $account = $this->authorizeAccountRequest($request);
-        $server = $account->whmServer;
+        [$account, $install] = $this->authorizeInstallRequest($request);
 
         $result = $this->wpToolkit->generateWordPressLoginUrl(
-            $server,
-            $request->input('wp_path'),
+            $account->whmServer,
+            (string) $install['path'],
             $account->username,
             $request->input('wp_user'),
-            $request->input('site_url'),
+            (string) ($install['url'] ?? ''),
             (string) $request->input('redirect', '')
         );
 
@@ -258,20 +298,18 @@ class WpToolkitDashboardController extends Controller
     {
         $request->validate([
             'server_id'  => 'required|integer|exists:whm_servers,id',
-            'install_id' => 'required|integer',
-            'wp_path'    => 'required|string',
+            'install_id' => 'required|integer|min:1',
             'username'   => 'required|string|max:255',
             'wp_user'    => 'required|string|max:255',
             'password'   => 'nullable|string|min:8|max:255',
         ]);
 
-        $account = $this->authorizeAccountRequest($request);
-        $server = $account->whmServer;
+        [$account, $install] = $this->authorizeInstallRequest($request);
 
         $result = $this->wpToolkit->resetWordPressPassword(
-            $server,
-            (int) $request->input('install_id'),
-            $request->input('wp_path'),
+            $account->whmServer,
+            (int) $install['id'],
+            (string) $install['path'],
             $account->username,
             $request->input('wp_user'),
             $request->input('password')
@@ -290,20 +328,18 @@ class WpToolkitDashboardController extends Controller
     {
         $request->validate([
             'server_id'  => 'required|integer|exists:whm_servers,id',
-            'install_id' => 'required|integer',
-            'wp_path'    => 'required|string',
+            'install_id' => 'required|integer|min:1',
             'username'   => 'required|string|max:255',
             'wp_user'    => 'required|string|max:255',
             'password'   => 'required|string|max:255',
         ]);
 
-        $account = $this->authorizeAccountRequest($request);
-        $server = $account->whmServer;
+        [$account, $install] = $this->authorizeInstallRequest($request);
 
         $result = $this->wpToolkit->testWordPressPassword(
-            $server,
-            (int) $request->input('install_id'),
-            $request->input('wp_path'),
+            $account->whmServer,
+            (int) $install['id'],
+            (string) $install['path'],
             $account->username,
             $request->input('wp_user'),
             $request->input('password')
@@ -354,6 +390,8 @@ class WpToolkitDashboardController extends Controller
 
     public function saveSettings(Request $request): JsonResponse
     {
+        $this->authorizeAdministratorRequest($request);
+
         $validated = $request->validate([
             'mode' => 'required|string|in:auto,ssh,local',
             'local_hosts' => 'nullable|string|max:5000',
@@ -377,6 +415,8 @@ class WpToolkitDashboardController extends Controller
 
     public function serverDiagnostics(Request $request): JsonResponse
     {
+        $this->authorizeAdministratorRequest($request);
+
         $request->validate([
             'server_id' => 'required|integer|exists:whm_servers,id',
         ]);
@@ -388,6 +428,8 @@ class WpToolkitDashboardController extends Controller
 
     public function siteCommandTest(Request $request): JsonResponse
     {
+        $this->authorizeAdministratorRequest($request);
+
         $validated = $request->validate([
             'site_id' => 'required|integer',
             'test' => 'required|string|in:write,authors,categories',
@@ -437,5 +479,3 @@ class WpToolkitDashboardController extends Controller
         ]);
     }
 }
-
-

@@ -259,10 +259,9 @@ document.addEventListener('DOMContentLoaded', function() {
             headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
             body: JSON.stringify({
                 server_id: serverId,
-                wp_path: currentInstall.path,
+                install_id: currentInstall.id,
                 username: currentInstall.cpanel_user,
                 wp_user: currentAdminUser,
-                site_url: currentInstall.url,
             }),
         })
         .then(r => r.json())

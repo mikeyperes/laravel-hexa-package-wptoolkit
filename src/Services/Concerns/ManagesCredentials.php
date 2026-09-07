@@ -25,7 +25,7 @@ trait ManagesCredentials
      * @param string    $wpPath    Full path to the WordPress install
      * @param string    $username  The cPanel username (for fallback wp-cli)
      * @param string|null $loginUrl The loginUrl from WP Toolkit list output
-     * @return array{success: bool, admin_users?: array, login_url?: string, raw_output?: string, error?: string}
+     * @return array{success: bool, admin_users?: array, login_url?: string, error?: string}
      */
     public function getCredentials(WhmServer $server, int $installId, string $wpPath, string $username, ?string $loginUrl = null): array
     {
@@ -93,19 +93,17 @@ trait ManagesCredentials
 
         // Get stored credentials, DB creds, and login URL from WP Toolkit
         $storedCreds = $this->getStoredCredentials($server, $connection, $installId, $wpPath, $username);
-        $output .= "\n---STORED_CREDS---\n" . ($storedCreds['raw'] ?? '');
 
         $connection->disconnect();
 
         if ($adminUsers === null) {
             $this->generic->log('error', '[WpToolkit] All methods failed to get admin users', [
                 'install_id' => $installId,
-                'output'     => mb_substr($output, 0, 500),
+                'output_length' => strlen($output),
             ]);
             return [
-                'success'    => false,
-                'error'      => 'Could not retrieve admin users. All methods failed.',
-                'raw_output' => $output,
+                'success' => false,
+                'error' => 'Could not retrieve administrator users.',
             ];
         }
 
@@ -150,8 +148,6 @@ trait ManagesCredentials
             'login_info'         => $storedCreds['login_info'] ?? null,
             'stored_credentials' => $storedCredentials,
             'db_credentials'     => $storedCreds['db'] ?? null,
-            'raw_output'         => $output,
-            'debug_stored_creds' => $storedCreds['raw'] ?? null,
         ];
     }
 
@@ -256,8 +252,8 @@ PHP;
     /**
      * Reset a WordPress user's password via wp-cli.
      *
-     * Generates a random password, sets it via wp-toolkit --wp-cli or
-     * direct wp-cli fallback, and returns the new plaintext password.
+     * Uses the requested password when provided, otherwise generates one, sets
+     * it via wp-toolkit --wp-cli or direct wp-cli, and returns it once.
      *
      * @param WhmServer $server   The WHM server
      * @param int       $installId WP Toolkit install ID
@@ -266,7 +262,7 @@ PHP;
      * @param string    $wpUser   WordPress username to reset
      * @return array{success: bool, password?: string, wp_user?: string, error?: string}
      */
-    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser): array
+    public function resetWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser, ?string $requestedPassword = null): array
     {
         $this->generic->log('info', '[WpToolkit] resetWordPressPassword starting', [
             'server'     => $server->name,
@@ -283,8 +279,9 @@ PHP;
         $connection = $ssh['connection'];
         $wptBin = $this->shellBinary($connection, $server);
 
-        // Generate a random password
-        $newPassword = bin2hex(random_bytes(12));
+        $newPassword = $requestedPassword !== null && $requestedPassword !== ''
+            ? $requestedPassword
+            : bin2hex(random_bytes(12));
 
         $escapedId = escapeshellarg((string) $installId);
         $escapedPath = escapeshellarg($wpPath);
@@ -294,7 +291,10 @@ PHP;
 
         // Method 1: wp-toolkit --wp-cli
         $cmd = "{$wptBin} --wp-cli -instance-id {$escapedId} -- user update {$escapedWpUser} --user_pass={$escapedPass} 2>&1";
-        $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', ['command' => $cmd]);
+        $this->generic->log('info', '[WpToolkit] Trying password reset via wp-toolkit', [
+            'install_id' => $installId,
+            'wp_user' => $wpUser,
+        ]);
         $output = trim($connection->exec($cmd));
 
         if (str_contains($output, 'Success')) {
@@ -309,7 +309,10 @@ PHP;
 
         // Method 2: Direct wp-cli as cPanel user
         $cmd = "sudo -u {$escapedUser} wp user update {$escapedWpUser} --user_pass={$escapedPass} --path={$escapedPath} 2>&1";
-        $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', ['command' => $cmd]);
+        $this->generic->log('info', '[WpToolkit] Fallback to direct wp-cli', [
+            'install_id' => $installId,
+            'wp_user' => $wpUser,
+        ]);
         $fallbackOutput = trim($connection->exec($cmd));
         $output .= "\n---FALLBACK---\n" . $fallbackOutput;
 
@@ -325,29 +328,50 @@ PHP;
         }
 
         $this->generic->log('error', '[WpToolkit] Password reset failed', [
-            'output' => mb_substr($output, 0, 500),
+            'install_id' => $installId,
+            'output_length' => strlen($output),
         ]);
 
         return [
             'success'    => false,
-            'error'      => 'Password reset failed. Output: ' . mb_substr($output, 0, 300),
-            'raw_output' => $output,
+            'error'      => 'Password reset failed.',
         ];
     }
 
     /**
-     * Generate a one-click WordPress admin login URL.
-     *
-     * Deploys a temporary mu-plugin that auto-authenticates and self-deletes
-     * after use or TTL expiry.
-     *
-     * @param WhmServer $server    The WHM server
-     * @param string    $wpPath    Full path to WordPress install
-     * @param string    $username  cPanel username (file owner)
-     * @param string    $wpUser    WordPress username to log in as
-     * @param string    $siteUrl   The site URL for building the login link
-     * @return array{success: bool, url?: string, expires_in?: int, error?: string}
+     * Verify a WordPress password without returning or logging command output.
      */
+    public function testWordPressPassword(WhmServer $server, int $installId, string $wpPath, string $username, string $wpUser, string $password): array
+    {
+        $ssh = $this->getConnection($server);
+        if (! ($ssh['success'] ?? false)) {
+            return ['success' => false, 'error' => 'Unable to connect to the WordPress host.'];
+        }
+
+        $connection = $ssh['connection'];
+        $command = $this->shellBinary($connection, $server)
+            .' --wp-cli -instance-id '.escapeshellarg((string) $installId)
+            .' -- user check-password '.escapeshellarg($wpUser).' '.escapeshellarg($password).' 2>&1';
+
+        try {
+            $result = $this->runCommandWithExitCode($connection, $command);
+        } finally {
+            $this->disconnectCachedConnection($server, $connection);
+        }
+
+        $valid = ($result['exit_code'] ?? 1) === 0;
+
+        return [
+            'success' => $valid,
+            'steps' => [[
+                'time' => now()->toIso8601String(),
+                'message' => $valid ? 'WordPress accepted the password.' : 'WordPress rejected the password.',
+                'status' => $valid ? 'ok' : 'error',
+            ]],
+            ...($valid ? [] : ['error' => 'WordPress rejected the password.']),
+        ];
+    }
+
     /**
      * Get stored credentials from WP Toolkit for a WordPress install.
      *
@@ -359,7 +383,7 @@ PHP;
      * @param int    $installId  WP Toolkit install ID
      * @param string $wpPath     Full path to WordPress install
      * @param string $username   cPanel username
-     * @return array{credentials: array|null, db: array|null, raw: string}
+     * @return array{credentials: array|null, db: array|null, login_info: array|null}
      */
     protected function getStoredCredentials(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId, string $wpPath, string $username): array
     {
@@ -367,7 +391,6 @@ PHP;
         $escapedPath = escapeshellarg($wpPath);
         $escapedUser = escapeshellarg($username);
         $wptBin = $this->shellBinary($connection, $server);
-        $raw = '';
         $credentials = null;
         $dbCreds = null;
         $loginInfo = null;
@@ -377,17 +400,14 @@ PHP;
         $sqliteDb = '/usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3';
         $cmd = "sqlite3 {$sqliteDb} \"SELECT name, value FROM InstanceProperties WHERE instanceId = {$installId} AND (name = 'login' OR name = 'password' OR name = 'adminLoginLink' OR name = 'admin_email')\" 2>&1";
         $sqliteOutput = trim($connection->exec($cmd));
-        $raw .= "sqlite3 InstanceProperties: " . $sqliteOutput . "\n";
-
         $this->generic->log('info', '[WpToolkit] SQLite InstanceProperties', [
             'install_id' => $installId,
-            'output'     => $sqliteOutput,
+            'properties_found' => $sqliteOutput !== '',
         ]);
 
         $adminLogin = null;
         $adminPass = null;
         $adminEmail = null;
-        $adminLoginLink = null;
 
         if ($sqliteOutput) {
             foreach (explode("\n", $sqliteOutput) as $line) {
@@ -398,40 +418,17 @@ PHP;
                     if ($name === 'login') $adminLogin = $value;
                     if ($name === 'password') $adminPass = $value;
                     if ($name === 'admin_email') $adminEmail = $value;
-                    if ($name === 'adminLoginLink') $adminLoginLink = $value;
                 }
             }
         }
 
-        // Password is AES-256-GCM encrypted in SQLite — we cannot decrypt it
-        // Use wp-toolkit --site-admin-reset-password to get a plaintext password
+        // Encrypted WP Toolkit passwords are presence-only. Reading credentials
+        // must never reset a live WordPress administrator's password.
         $passwordEncrypted = false;
         if ($adminPass && str_starts_with($adminPass, '$aes-256-gcm$')) {
             $passwordEncrypted = true;
             $adminPass = null;
-
-            // Reset password via WP Toolkit CLI to get plaintext
-            if ($adminLogin) {
-                $escapedLogin = escapeshellarg($adminLogin);
-                $resetCmd = "{$wptBin} --site-admin-reset-password -instance-id {$escapedId} -admin-login {$escapedLogin} 2>&1";
-                $resetOutput = trim($connection->exec($resetCmd));
-                $raw .= "RESET_PASSWORD: " . $resetOutput . "\n";
-
-                $this->generic->log('info', '[WpToolkit] Password reset via CLI', [
-                    'install_id' => $installId,
-                    'login'      => $adminLogin,
-                    'output'     => $resetOutput,
-                ]);
-
-                // Parse: "  login     hexa-pr-wire\n  password  c7^!t!VHio3OC4_4"
-                if (preg_match('/password\s+(.+)$/m', $resetOutput, $m)) {
-                    $adminPass = trim($m[1]);
-                    $passwordEncrypted = false;
-                }
-            }
         }
-
-        $raw .= "SQLITE_CREDS: login=" . ($adminLogin ?? 'NULL') . " pass=" . ($adminPass ? 'YES(' . strlen($adminPass) . ')' : ($passwordEncrypted ? 'ENCRYPTED' : 'NULL')) . "\n";
 
         if ($adminLogin) {
             $credentials = [
@@ -477,8 +474,6 @@ PHP;
         // Method 2: Read DB credentials from wp-config.php
         $cmd = "sudo -u {$escapedUser} grep -E \"^define\\(\\s*'(DB_NAME|DB_USER|DB_PASSWORD|DB_HOST)'\" {$escapedPath}/wp-config.php 2>&1";
         $dbOutput = trim($connection->exec($cmd));
-        $raw .= "wp-config.php DB: " . $dbOutput . "\n";
-
         if ($dbOutput && !str_contains($dbOutput, 'No such file')) {
             $dbCreds = [];
             foreach (explode("\n", $dbOutput) as $line) {
@@ -495,7 +490,6 @@ PHP;
             'credentials' => $credentials,
             'db'          => $dbCreds,
             'login_info'  => $loginInfo,
-            'raw'         => $raw,
         ];
     }
 

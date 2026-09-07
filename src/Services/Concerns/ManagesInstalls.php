@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wptoolkit\Support\WpToolkitInstallScope;
 
 /**
  * ManagesInstalls — WordPress install discovery and parsing.
@@ -286,13 +287,15 @@ trait ManagesInstalls
         }
 
         $installs = [];
-        $homeDir = '/home/' . $username;
-
         foreach ($decoded as $item) {
-            $path = $item['fullPath'] ?? $item['path'] ?? $item['documentRoot'] ?? null;
+            $path = WpToolkitInstallScope::normalizePathForAccount(
+                $item['fullPath'] ?? $item['path'] ?? $item['documentRoot'] ?? null,
+                $username,
+            );
 
-            // Filter to only installs belonging to this cPanel user
-            if ($path && !str_starts_with($path, $homeDir)) {
+            // An account inventory is authoritative only when every returned path
+            // resolves beneath that account's exact /home/<username>/ boundary.
+            if ($path === null) {
                 continue;
             }
 

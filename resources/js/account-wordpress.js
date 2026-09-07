@@ -27,7 +27,7 @@ document.addEventListener('alpine:init', function() {
                 var key=wp.path+'::'+wpUser;
                 this.wpAutoLogging[key]=true;
                 this.wpLoginUrls[key]=null;
-                fetch(cfg.routes.wpLogin, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,wp_path:wp.path,username:cfg.username,wp_user:wpUser,site_url:wp.url})})
+                fetch(cfg.routes.wpLogin, {method:'POST',headers:this._h(),body:JSON.stringify({server_id:cfg.serverId,install_id:wp.id,username:cfg.username,wp_user:wpUser})})
                 .then(r=>r.json()).then(d=>{
                     this.wpAutoLogging[key]=false;
                     if(d.url){
