@@ -29,30 +29,32 @@ trait ManagesWpCliContent
 
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        $tmpDirectory = $installPath ? rtrim($installPath, '/') : '/tmp';
+        $tmpFile = $tmpDirectory . '/.hexa_wp_post_' . uniqid('', true) . '.html';
 
-        // Write content to temp file on server (avoids shell escaping issues with HTML)
-        $tmpFile = '/tmp/hexa_wp_post_' . uniqid() . '.html';
-        $this->execWithConnection($connection, 'cat > ' . escapeshellarg($tmpFile) . ' << \'HEXAEOF\'' . "\n" . $content . "\nHEXAEOF");
+        $stageError = $this->stageWpCliTempFile($connection, $tmpFile, $content);
+        if ($stageError !== null) {
+            return ['success' => false, 'message' => 'Failed to stage post content for wp-cli: ' . $stageError];
+        }
 
-        // Build wp post create command
-        $cmd = "{$wpCliBase} post create"
-            . " --post_title=" . escapeshellarg($title)
-            . " --post_status=" . escapeshellarg($status)
-            . " --post_type=" . escapeshellarg($postType)
-            . " --post_content=\"$(cat " . escapeshellarg($tmpFile) . ")\""
-            . " --porcelain";
+        $cmd = $wpCliBase . ' post create ' . escapeshellarg($tmpFile)
+            . ' --post_title=' . escapeshellarg($title)
+            . ' --post_status=' . escapeshellarg($status)
+            . ' --post_type=' . escapeshellarg($postType)
+            . ' --porcelain';
 
         if (!empty($categoryIds)) {
-            $cmd .= " --post_category=" . escapeshellarg(implode(',', $categoryIds));
+            $cmd .= ' --post_category=' . escapeshellarg(implode(',', array_map('intval', $categoryIds)));
         }
         // Tags set after post creation via wp_set_post_tags (--tags_input expects names, not IDs)
         if ($date && $status === 'future') {
-            $cmd .= " --post_date=" . escapeshellarg($date);
+            $cmd .= ' --post_date=' . escapeshellarg($date);
         }
         if ($author) {
             $wpUserId = $this->resolveWpAuthorId($server, $connection, $installId, (string) $author);
             if ($wpUserId !== null) {
-                $cmd .= " --post_author=" . escapeshellarg($wpUserId);
+                $cmd .= ' --post_author=' . escapeshellarg($wpUserId);
                 if (!is_numeric((string) $author)) {
                     $this->generic->log('info', '[WpToolkit] Resolved author', ['username' => $author, 'wp_id' => $wpUserId]);
                 }
@@ -63,35 +65,78 @@ trait ManagesWpCliContent
 
         $this->generic->log('info', '[WpToolkit] wpCliCreatePost', ['install_id' => $installId, 'title' => $title, 'status' => $status, 'author' => $author]);
 
-        $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        try {
+            $output = trim($this->execWithConnection($connection, $cmd . ' 2>&1'));
+        } finally {
+            $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpFile));
+        }
 
-        // Cleanup temp file
-        $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tmpFile));
+        $postId = null;
+        $blockingLines = [];
+        $insidePhpDiagnostic = false;
+        foreach (preg_split('/\R/', $output) as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            if (is_numeric($line)) {
+                $postId = (int) $line;
+                $insidePhpDiagnostic = false;
+                continue;
+            }
+            if (str_starts_with($line, 'Deprecated:') || str_starts_with($line, 'Warning:') || str_starts_with($line, 'Notice:') || str_starts_with($line, 'PHP ') || str_starts_with($line, 'PHP:')) {
+                $insidePhpDiagnostic = true;
+                continue;
+            }
+            if ($insidePhpDiagnostic && ($line === 'array (' || str_starts_with($line, "'") || str_starts_with($line, '#') || $line === ')' || $line === ')]')) {
+                continue;
+            }
+            $insidePhpDiagnostic = false;
+            $blockingLines[] = $line;
+        }
 
-        // --porcelain returns just the post ID
-        if (is_numeric($output)) {
-            $postId = (int) $output;
+        if ($postId !== null && $blockingLines === []) {
 
             // Set tags via wp_set_post_tags (IDs, not names)
             if (!empty($tagIds)) {
-                $tagIdsStr = implode(',', array_map('intval', $tagIds));
-                $tagPhp = base64_encode('wp_set_post_tags(' . $postId . ', [' . $tagIdsStr . ']); echo "TAGS_SET";');
-                $tagCmd = "CODE=\$(echo '{$tagPhp}' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
-                $this->execWithConnection($connection, $tagCmd);
+                $tagIds = array_values(array_filter(array_map('intval', $tagIds)));
+                $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . implode(',', $tagIds) . ']);';
+                $tagTmpFile = $tmpDirectory . '/.hexa_wp_tags_' . uniqid('', true) . '.php';
+                $tagStageError = $this->stageWpCliTempFile($connection, $tagTmpFile, $tagPhp);
+                if ($tagStageError !== null) {
+                    $this->execWithConnection($connection, $wpCliBase . ' post delete ' . escapeshellarg((string) $postId) . ' --force 2>&1');
+
+                    return ['success' => false, 'message' => 'Post created, but tag assignment could not be staged: ' . $tagStageError];
+                }
+
+                try {
+                    $tagCmd = $wpCliBase . ' eval-file ' . escapeshellarg($tagTmpFile) . ' 2>&1';
+                    $tagResult = $this->runCommandWithExitCode($connection, $tagCmd);
+                } finally {
+                    $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($tagTmpFile));
+                }
+
+                if ((int) ($tagResult['exit_code'] ?? 1) !== 0) {
+                    $this->execWithConnection($connection, $wpCliBase . ' post delete ' . escapeshellarg((string) $postId) . ' --force 2>&1');
+
+                    return ['success' => false, 'message' => 'Post created, but tag assignment failed: ' . \Illuminate\Support\Str::limit((string) ($tagResult['clean_output'] ?: $tagResult['raw_output']), 300)];
+                }
                 $this->generic->log('info', '[WpToolkit] Tags set via wp_set_post_tags', ['post_id' => $postId, 'tag_ids' => $tagIds]);
             }
 
             // Set featured image if provided
             if ($featuredMediaId) {
-                $metaCmd = "{$wpCliBase} post meta update {$postId} _thumbnail_id {$featuredMediaId} 2>&1";
+                $metaCmd = $wpCliBase . ' post meta update ' . escapeshellarg((string) $postId) . ' _thumbnail_id ' . escapeshellarg((string) $featuredMediaId) . ' 2>&1';
                 $this->execWithConnection($connection, $metaCmd);
                 $this->generic->log('info', '[WpToolkit] Featured image set', ['post_id' => $postId, 'media_id' => $featuredMediaId]);
             }
 
             // Get permalink
-            $urlCmd = "{$wpCliBase} post get {$postId} --field=url 2>&1";
+            $urlCmd = $wpCliBase . ' post get ' . escapeshellarg((string) $postId) . ' --field=url 2>&1';
             $postUrl = trim($this->execWithConnection($connection, $urlCmd));
-            if (!str_starts_with($postUrl, 'http')) $postUrl = null;
+            if (!str_starts_with($postUrl, 'http')) {
+                $postUrl = null;
+            }
 
             $this->generic->log('info', '[WpToolkit] Post created', ['post_id' => $postId, 'url' => $postUrl]);
             return [
@@ -101,8 +146,14 @@ trait ManagesWpCliContent
             ];
         }
 
-        $this->generic->log('error', '[WpToolkit] wpCliCreatePost failed', ['output' => $output]);
-        return ['success' => false, 'message' => 'wp-cli post create failed: ' . \Illuminate\Support\Str::limit($output, 300)];
+        if ($postId !== null) {
+            $this->execWithConnection($connection, $wpCliBase . ' post delete ' . escapeshellarg((string) $postId) . ' --force 2>&1');
+        }
+
+        $errorOutput = $blockingLines !== [] ? implode(PHP_EOL, $blockingLines) : $output;
+        $this->generic->log('error', '[WpToolkit] wpCliCreatePost failed', ['output' => $output, 'blocking_lines' => $blockingLines]);
+
+        return ['success' => false, 'message' => 'wp-cli post create failed: ' . \Illuminate\Support\Str::limit($errorOutput, 300)];
     }
 
     /**
@@ -123,18 +174,24 @@ trait ManagesWpCliContent
 
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        $tmpDirectory = $installPath ? rtrim($installPath, '/') : '/tmp';
 
         $tmpFiles = [];
         $tmpFile = null;
         if (array_key_exists('content', $postData)) {
-            $tmpFile = '/tmp/hexa_wp_post_' . uniqid('', true) . '.html';
+            $tmpFile = $tmpDirectory . '/.hexa_wp_post_' . uniqid('', true) . '.html';
             $tmpFiles[] = $tmpFile;
-            $contentBase64 = base64_encode((string) ($postData['content'] ?? ''));
-            $writeCmd = 'printf %s ' . escapeshellarg($contentBase64) . ' | base64 -d > ' . escapeshellarg($tmpFile);
-            $this->execWithConnection($connection, $writeCmd);
+            $stageError = $this->stageWpCliTempFile($connection, $tmpFile, (string) ($postData['content'] ?? ''));
+            if ($stageError !== null) {
+                return ['success' => false, 'message' => 'Failed to stage post content for wp-cli: ' . $stageError];
+            }
         }
 
         $cmd = "{$wpCliBase} post update " . escapeshellarg((string) $postId);
+        if ($tmpFile) {
+            $cmd .= ' ' . escapeshellarg($tmpFile);
+        }
         if (array_key_exists('title', $postData)) {
             $cmd .= ' --post_title=' . escapeshellarg((string) $postData['title']);
         }
@@ -149,9 +206,6 @@ trait ManagesWpCliContent
         }
         if (array_key_exists('excerpt', $postData)) {
             $cmd .= ' --post_excerpt=' . escapeshellarg((string) ($postData['excerpt'] ?? ''));
-        }
-        if ($tmpFile) {
-            $cmd .= ' --post_content="$(cat ' . escapeshellarg($tmpFile) . ')"';
         }
         if (!empty($postData['categories'])) {
             $cmd .= ' --post_category=' . escapeshellarg(implode(',', array_map('intval', $postData['categories'])));
@@ -211,12 +265,17 @@ trait ManagesWpCliContent
                 if (array_key_exists('tags', $postData) && is_array($postData['tags'])) {
                     $tagIds = array_values(array_filter(array_map('intval', $postData['tags'])));
                     $tagPhp = '<?php wp_set_post_tags(' . $postId . ', [' . implode(',', $tagIds) . ']);';
-                    $tagTmpFile = '/tmp/hexa_wp_tags_' . uniqid('', true) . '.php';
+                    $tagTmpFile = $tmpDirectory . '/.hexa_wp_tags_' . uniqid('', true) . '.php';
                     $tmpFiles[] = $tagTmpFile;
-                    $tagWriteCmd = 'printf %s ' . escapeshellarg(base64_encode($tagPhp)) . ' | base64 -d > ' . escapeshellarg($tagTmpFile);
-                    $this->execWithConnection($connection, $tagWriteCmd);
+                    $tagStageError = $this->stageWpCliTempFile($connection, $tagTmpFile, $tagPhp);
+                    if ($tagStageError !== null) {
+                        return ['success' => false, 'message' => 'Post updated, but tag assignment could not be staged: ' . $tagStageError];
+                    }
                     $tagCmd = "{$wpCliBase} eval-file " . escapeshellarg($tagTmpFile) . ' 2>&1';
-                    $this->execWithConnection($connection, $tagCmd);
+                    $tagResult = $this->runCommandWithExitCode($connection, $tagCmd);
+                    if ((int) ($tagResult['exit_code'] ?? 1) !== 0) {
+                        return ['success' => false, 'message' => 'Post updated, but tag assignment failed: ' . \Illuminate\Support\Str::limit((string) ($tagResult['clean_output'] ?: $tagResult['raw_output']), 300)];
+                    }
                 }
 
                 if (array_key_exists('featured_media', $postData)) {

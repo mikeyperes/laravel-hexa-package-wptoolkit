@@ -93,6 +93,54 @@ trait RunsWpCliCommands
         return rtrim($fullPath, '/');
     }
 
+    protected function stageWpCliTempFile(SSH2|LocalShellConnection $connection, string $path, string $contents): ?string
+    {
+        try {
+            if ($connection instanceof LocalShellConnection) {
+                $bytes = @file_put_contents($path, $contents, LOCK_EX);
+
+                return $bytes === strlen($contents)
+                    ? null
+                    : 'Local temporary file write was incomplete.';
+            }
+
+            $encodedPath = $path . '.b64';
+            $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($encodedPath) . ' ' . escapeshellarg($path));
+            $initialize = $this->runCommandWithExitCode($connection, ': > ' . escapeshellarg($encodedPath));
+            if ((int) ($initialize['exit_code'] ?? 1) !== 0) {
+                return 'Remote temporary file could not be initialized.';
+            }
+
+            foreach (str_split(base64_encode($contents), 24000) as $chunk) {
+                $append = $this->runCommandWithExitCode(
+                    $connection,
+                    'printf %s ' . escapeshellarg($chunk) . ' >> ' . escapeshellarg($encodedPath),
+                );
+                if ((int) ($append['exit_code'] ?? 1) !== 0) {
+                    $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($encodedPath));
+
+                    return 'Remote temporary file write failed.';
+                }
+            }
+
+            $decode = $this->runCommandWithExitCode(
+                $connection,
+                'base64 -d ' . escapeshellarg($encodedPath) . ' > ' . escapeshellarg($path),
+            );
+            $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($encodedPath));
+
+            if ((int) ($decode['exit_code'] ?? 1) !== 0) {
+                $this->execWithConnection($connection, 'rm -f ' . escapeshellarg($path));
+
+                return 'Remote temporary file decode failed.';
+            }
+
+            return null;
+        } catch (\Throwable) {
+            return 'Temporary file staging failed.';
+        }
+    }
+
     protected function execWithConnection(SSH2|LocalShellConnection $connection, string $cmd): string
     {
         if (method_exists($connection, 'setTimeout')) {

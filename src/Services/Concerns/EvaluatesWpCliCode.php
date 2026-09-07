@@ -18,7 +18,8 @@ trait EvaluatesWpCliCode
         $connection = $ssh['connection'];
         $wpCliBase = $this->wpCliBaseCommand($server, $connection, $installId);
         $b64 = base64_encode($php);
-        $cmd = "CODE=$(echo '" . $b64 . "' | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1";
+        $cmd = 'CODE=$(printf %s ' . escapeshellarg($b64) . ' | base64 -d) && '
+            . $wpCliBase . ' eval "$CODE" 2>&1';
         $previousTimeout = $this->commandTimeoutSeconds();
         if ($timeout !== null && method_exists($connection, 'setTimeout')) {
             $connection->setTimeout(max(10, $timeout));

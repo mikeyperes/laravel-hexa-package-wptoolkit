@@ -41,9 +41,40 @@ class WpCliCommandEscapingTest extends TestCase
         );
 
         $this->assertTrue($result['success']);
-        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- eval'));
+        $tagCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- eval-file'));
         $this->assertNotNull($tagCommand);
-        $this->assertStringContainsString('$CODE', $tagCommand);
+        $this->assertStringContainsString("-- eval-file '/tmp/.hexa_wp_tags_", $tagCommand);
+        $this->assertStringNotContainsString('$CODE', $tagCommand);
+    }
+
+    public function test_post_content_is_staged_outside_the_shell_command(): void
+    {
+        $harness = new WpCliHarness();
+        $content = "<p>Body</p>\nHEXAEOF\n\$(touch /tmp/must-not-run)";
+
+        $result = $harness->wpCliCreatePost(new WhmServer(), 44, 'Audit Post', $content);
+
+        $this->assertTrue($result['success']);
+        $postCommand = collect($harness->commands)->first(fn (string $command) => str_contains($command, '-- post create'));
+        $this->assertNotNull($postCommand);
+        $this->assertStringContainsString("'/tmp/.hexa_wp_post_", $postCommand);
+        $this->assertStringNotContainsString('HEXAEOF', $postCommand);
+        $this->assertStringNotContainsString('must-not-run', $postCommand);
+        $this->assertStringNotContainsString('--post_content=', $postCommand);
+    }
+
+    public function test_wp_cli_eval_preserves_a_nonzero_exit_status(): void
+    {
+        $harness = new WpCliHarness();
+        $harness->forcedExitCode = 1;
+        $harness->forcedOutput = 'Fatal error: database global is unavailable';
+
+        $result = $harness->wpCliEval(new WhmServer(), 44, 'global $wpdb;');
+
+        $this->assertFalse($result['success']);
+        $this->assertSame(1, $result['exit_code']);
+        $this->assertSame($harness->forcedOutput, $result['stdout']);
+        $this->assertStringContainsString('wp-cli eval failed', $result['message']);
     }
 }
 
@@ -55,6 +86,10 @@ class WpCliHarness
      * @var array<int, string>
      */
     public array $commands = [];
+
+    public int $forcedExitCode = 0;
+
+    public string $forcedOutput = 'Success: ok';
 
     public object $generic;
 
@@ -92,12 +127,17 @@ class WpCliHarness
         return false;
     }
 
+    protected function stageWpCliTempFile(SSH2|LocalShellConnection $connection, string $path, string $contents): ?string
+    {
+        return null;
+    }
+
     protected function execWithConnection($connection, string $command): string
     {
         $this->commands[] = $command;
 
         if (str_contains($command, '__HEXA_CMD_EXIT__')) {
-            return "Success: ok\n__HEXA_CMD_EXIT__:0";
+            return $this->forcedOutput . "\n__HEXA_CMD_EXIT__:" . $this->forcedExitCode;
         }
 
         if (str_contains($command, '-- post create')) {
