@@ -3,6 +3,7 @@
 namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wptoolkit\Support\WpToolkitInstallScope;
 
 trait ManagesWpToolkitOperations
 {
@@ -352,7 +353,7 @@ trait ManagesWpToolkitOperations
     {
         $cpanelUsername = trim($cpanelUsername);
         $wordpressPath = trim($wordpressPath, "/ \t\n\r\0\x0B");
-        $pluginDirectory = trim($pluginDirectory, "/ \t\n\r\0\x0B");
+        $pluginDirectory = trim($pluginDirectory);
         $githubUrl = rtrim(trim($githubUrl), "/");
         $bootstrap = trim($bootstrap, "/ \t\n\r\0\x0B");
 
@@ -366,7 +367,7 @@ trait ManagesWpToolkitOperations
         if ($wordpressPath === '' || str_contains($wordpressPath, '..')) {
             return ['success' => false, 'message' => 'A valid WordPress path is required for plugin sync.'];
         }
-        if ($pluginDirectory === '' || !preg_match('/^[A-Za-z0-9._-]+$/', $pluginDirectory)) {
+        if ($pluginDirectory === '' || !preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/', $pluginDirectory)) {
             return ['success' => false, 'message' => 'A valid plugin directory is required for plugin sync.'];
         }
         if ($githubUrl === '' || !preg_match('#^https://github\.com/[^/]+/[^/]+/?$#i', $githubUrl)) {
@@ -376,13 +377,17 @@ trait ManagesWpToolkitOperations
             return ['success' => false, 'message' => 'A valid plugin bootstrap file is required for plugin sync.'];
         }
 
+        $wpRoot = WpToolkitInstallScope::normalizePathForAccount('/home/'.$cpanelUsername.'/'.$wordpressPath, $cpanelUsername);
+        if ($wpRoot === null) {
+            return ['success' => false, 'message' => 'The WordPress path must belong to the selected cPanel account.'];
+        }
+
         $ssh = $this->getConnection($server);
         if (!$ssh['success']) {
             return ['success' => false, 'message' => $ssh['error'] ?? 'SSH connection failed'];
         }
 
         $connection = $ssh['connection'];
-        $wpRoot = "/home/{$cpanelUsername}/{$wordpressPath}";
         $pluginRoot = $wpRoot . "/wp-content/plugins/" . $pluginDirectory;
         $backupBase = "/home/{$cpanelUsername}/_hexa-plugin-backups";
         $backupDir = $backupBase . "/" . date("YmdHis") . "-" . $pluginDirectory;
@@ -392,7 +397,13 @@ trait ManagesWpToolkitOperations
             . ' && WPCLI=$(command -v wp 2>/dev/null || true)'
             . ' && if [ -z "$WPCLI" ] && [ -x /usr/local/bin/wp ]; then WPCLI=/usr/local/bin/wp; fi'
             . ' && if [ -n "$WPCLI" ]; then ("$WPCLI" plugin activate ' . escapeshellarg($pluginDirectory) . ' --allow-root 2>&1 || "$WPCLI" plugin activate ' . escapeshellarg($pluginBasename) . ' --allow-root 2>&1) && "$WPCLI" rewrite flush --hard --allow-root 2>&1; else echo "wp-cli not found; activation skipped"; fi';
-        $command = "mkdir -p " . escapeshellarg($backupBase)
+        // Verify physical containment before any backup or deletion-capable sync.
+        // Reject symlinked ancestors and plugin targets, including dangling links.
+        $command = 'test ! -L ' . escapeshellarg($pluginRoot)
+            . ' && test "$(readlink -f ' . escapeshellarg($wpRoot) . ')" = ' . escapeshellarg($wpRoot)
+            . ' && test "$(readlink -f ' . escapeshellarg($wpRoot . '/wp-content/plugins') . ')" = ' . escapeshellarg($wpRoot . '/wp-content/plugins')
+            . ' && test -f ' . escapeshellarg($wpRoot . '/wp-load.php')
+            . ' && mkdir -p ' . escapeshellarg($backupBase)
             . " && if [ -d " . escapeshellarg($pluginRoot) . " ]; then cp -a " . escapeshellarg($pluginRoot) . " " . escapeshellarg($backupDir) . "; fi"
             . " && rm -rf " . escapeshellarg($tmp)
             . " && git clone --depth=1 " . escapeshellarg($githubUrl) . " " . escapeshellarg($tmp) . " 2>&1"
