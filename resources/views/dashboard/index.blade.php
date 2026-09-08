@@ -205,13 +205,13 @@
 
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
             <div>
-                <h2 class="text-lg font-semibold text-gray-900">Publish Site Command Tests</h2>
-                <p class="text-sm text-gray-500 mt-1">Run real write, author, and category checks against configured WP Toolkit sites without opening the publish pipeline.</p>
+                <h2 class="text-lg font-semibold text-gray-900">Saved Site Command Tests</h2>
+                <p class="text-sm text-gray-500 mt-1">Run real write, author, and category checks against saved WP Toolkit sites.</p>
             </div>
 
             <div class="flex flex-wrap items-end gap-3">
                 <label class="block flex-1 min-w-[220px]">
-                    <span class="text-sm font-medium text-gray-700">Publish Site</span>
+                    <span class="text-sm font-medium text-gray-700">Saved Site</span>
                     <select x-model="selectedSiteId" class="mt-1 w-full rounded-lg border-gray-300 text-sm">
                         <option value="">Select site…</option>
                         <template x-for="site in publishSites" :key="site.id">

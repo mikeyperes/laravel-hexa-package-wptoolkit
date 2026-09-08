@@ -6,6 +6,8 @@ use hexa_core\Http\Controllers\Controller;
 use hexa_core\Models\Setting;
 use hexa_package_whm\Models\HostingAccount;
 use hexa_package_whm\Models\WhmServer;
+use hexa_package_wptoolkit\Contracts\AccountAccessPolicy;
+use hexa_package_wptoolkit\Contracts\SiteCatalog;
 use hexa_package_wptoolkit\Services\WpToolkitService;
 use hexa_package_wptoolkit\Support\WpToolkitInstallScope;
 use Illuminate\Http\Request;
@@ -40,9 +42,8 @@ class WpToolkitDashboardController extends Controller
             ->where('username', (string) $request->input('username'))
             ->firstOrFail();
 
-        $accessService = 'hexa_app_code_portal\\Portal\\Terminal\\Support\\TerminalAccountAccessService';
-        if (class_exists($accessService)) {
-            abort_unless(app($accessService)->canAccess($request->user(), (int) $account->id), 403);
+        if (app()->bound(AccountAccessPolicy::class)) {
+            abort_unless(app(AccountAccessPolicy::class)->canAccess($request->user(), (int) $account->id), 403);
         } else {
             $this->authorizeAdministratorRequest($request);
         }
@@ -91,23 +92,7 @@ class WpToolkitDashboardController extends Controller
     {
         $this->authorizeAdministratorRequest($request);
         $servers = WhmServer::where('is_active', true)->get();
-        $publishSites = collect();
-
-        $publishSiteModel = 'hexa_app_publish\\Publishing\\Sites\\Models\\PublishSite';
-        if (class_exists($publishSiteModel)) {
-            $publishSites = $publishSiteModel::query()
-                ->where('connection_type', 'wptoolkit')
-                ->orderBy('name')
-                ->get([
-                    'id',
-                    'name',
-                    'url',
-                    'hosting_account_id',
-                    'wordpress_install_id',
-                    'status',
-                    'last_error',
-                ]);
-        }
+        $publishSites = collect(app()->bound(SiteCatalog::class) ? app(SiteCatalog::class)->sites() : []);
 
         $serverPayload = $servers->map(static fn (WhmServer $server): array => [
             'id' => $server->id,
@@ -115,13 +100,13 @@ class WpToolkitDashboardController extends Controller
             'hostname' => $server->hostname,
         ])->values();
 
-        $publishSitePayload = $publishSites->map(static fn ($site): array => [
-            'id' => $site->id,
-            'name' => $site->name,
-            'url' => $site->url,
-            'install_id' => $site->wordpress_install_id,
-            'status' => $site->status,
-            'last_error' => $site->last_error,
+        $publishSitePayload = $publishSites->map(static fn (array $site): array => [
+            'id' => $site['id'],
+            'name' => $site['name'],
+            'url' => $site['url'],
+            'install_id' => $site['install_id'],
+            'status' => $site['status'],
+            'last_error' => $site['last_error'],
         ])->values();
 
         return view('wptoolkit::dashboard.index', [
@@ -435,19 +420,18 @@ class WpToolkitDashboardController extends Controller
             'test' => 'required|string|in:write,authors,categories',
         ]);
 
-        $publishSiteModel = 'hexa_app_publish\\Publishing\\Sites\\Models\\PublishSite';
-        if (!class_exists($publishSiteModel)) {
+        if (!app()->bound(SiteCatalog::class)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Publish app is not installed, so site command tests are unavailable.',
+                'message' => 'No saved-site integration is configured, so site command tests are unavailable.',
             ], 422);
         }
 
-        $site = $publishSiteModel::query()->findOrFail((int) $validated['site_id']);
-        $account = HostingAccount::find($site->hosting_account_id);
+        $site = app(SiteCatalog::class)->findOrFail((int) $validated['site_id']);
+        $account = HostingAccount::find($site['hosting_account_id']);
         $server = $account ? WhmServer::find($account->whm_server_id) : null;
 
-        if (!$server || !$site->wordpress_install_id) {
+        if (!$server || !$site['install_id']) {
             return response()->json([
                 'success' => false,
                 'message' => 'Site is missing a server or WordPress install ID.',
@@ -455,19 +439,19 @@ class WpToolkitDashboardController extends Controller
         }
 
         $result = match ($validated['test']) {
-            'write' => $this->wpToolkit->wpCliTestWriteAccess($server, (int) $site->wordpress_install_id),
-            'authors' => $this->wpToolkit->wpCliListAdminUsers($server, (int) $site->wordpress_install_id),
-            'categories' => $this->wpToolkit->wpCliListCategories($server, (int) $site->wordpress_install_id),
+            'write' => $this->wpToolkit->wpCliTestWriteAccess($server, (int) $site['install_id']),
+            'authors' => $this->wpToolkit->wpCliListAdminUsers($server, (int) $site['install_id']),
+            'categories' => $this->wpToolkit->wpCliListCategories($server, (int) $site['install_id']),
         };
 
         return response()->json([
             'success' => (bool) ($result['success'] ?? false),
             'test' => $validated['test'],
             'site' => [
-                'id' => $site->id,
-                'name' => $site->name,
-                'url' => $site->url,
-                'install_id' => $site->wordpress_install_id,
+                'id' => $site['id'],
+                'name' => $site['name'],
+                'url' => $site['url'],
+                'install_id' => $site['install_id'],
             ],
             'server' => [
                 'id' => $server->id,
