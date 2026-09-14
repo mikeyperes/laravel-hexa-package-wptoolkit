@@ -71,6 +71,11 @@ trait EvaluatesWpCliCode
             return ['success' => false, 'stdout' => '', 'message' => 'Unable to locate a native wp-cli binary on the target server.'];
         }
 
+        $nativeCommand = $this->directWpCliCommand($connection, $wpBinary, $installPath);
+        if ($nativeCommand === null) {
+            return ['success' => false, 'stdout' => '', 'message' => 'Unable to resolve the installation owner or CLI PHP binary for native wp-cli.'];
+        }
+
         $previousTimeout = $this->commandTimeoutSeconds();
         if (method_exists($connection, 'setTimeout')) {
             $connection->setTimeout(max(10, $timeout));
@@ -79,9 +84,7 @@ trait EvaluatesWpCliCode
         try {
             $b64 = base64_encode($php);
             $cmd = 'CODE=$(printf %s ' . escapeshellarg($b64) . ' | base64 -d) && '
-                . escapeshellarg($wpBinary)
-                . ' --path=' . escapeshellarg($installPath)
-                . ' --allow-root eval "$CODE" 2>&1';
+                . $nativeCommand . ' eval "$CODE" 2>&1';
             $result = $this->runCommandWithExitCode($connection, $cmd);
         } finally {
             if (method_exists($connection, 'setTimeout')) {
@@ -101,6 +104,41 @@ trait EvaluatesWpCliCode
             'wp_binary' => $wpBinary,
             'install_path' => $installPath,
         ];
+    }
+
+    protected function directWpCliCommand(SSH2|LocalShellConnection $connection, string $wpBinary, string $installPath): ?string
+    {
+        $identity = $this->runCommandWithExitCode($connection, 'id -u');
+        $uid = trim((string) ($identity['clean_output'] ?: $identity['raw_output']));
+        if ((int) ($identity['exit_code'] ?? 1) !== 0 || !ctype_digit($uid)) {
+            return null;
+        }
+
+        $command = escapeshellarg($wpBinary) . ' --path=' . escapeshellarg($installPath);
+        if ($uid !== '0') {
+            return $command;
+        }
+
+        // Root-owned temporary files make WordPress select FTP during plugin
+        // bootstrap. Use the installation owner without altering FS_METHOD.
+        $ownerResult = $this->runCommandWithExitCode($connection, 'stat -c %U -- ' . escapeshellarg(rtrim($installPath, '/') . '/wp-includes/version.php'));
+        $owner = trim((string) ($ownerResult['clean_output'] ?: $ownerResult['raw_output']));
+        if ((int) ($ownerResult['exit_code'] ?? 1) !== 0 || !preg_match('/^[A-Za-z_][A-Za-z0-9_.-]*[$]?$/D', $owner) || $owner === 'UNKNOWN') {
+            return null;
+        }
+        if ($owner === 'root') {
+            return $command . ' --allow-root';
+        }
+
+        // sudo may replace PATH with a cPanel CGI PHP. Retain the proven CLI
+        // interpreter from the original execution context explicitly.
+        $phpResult = $this->runCommandWithExitCode($connection, 'php -r ' . escapeshellarg('if (PHP_SAPI === "cli") { echo PHP_BINARY; }'));
+        $phpBinary = trim((string) ($phpResult['clean_output'] ?: $phpResult['raw_output']));
+        if ((int) ($phpResult['exit_code'] ?? 1) !== 0 || !str_starts_with($phpBinary, '/') || preg_match('/[\r\n]/', $phpBinary)) {
+            return null;
+        }
+
+        return 'sudo -n -u ' . escapeshellarg($owner) . ' -- ' . escapeshellarg($phpBinary) . ' ' . $command;
     }
 
     protected function resolveDirectWpCliBinary(SSH2|LocalShellConnection $connection): string
