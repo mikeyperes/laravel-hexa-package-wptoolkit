@@ -74,9 +74,15 @@ trait ManagesWpToolkitConnections
             if ($conn->isConnected()) {
                 try {
                     $conn->setTimeout(3);
-                    $conn->exec('true');
+                    $probe = $conn->exec('true');
+                    $probeTimedOut = $conn->isTimeout();
                     $conn->setTimeout($this->commandTimeoutSeconds());
-                    return ['success' => true, 'connection' => $conn];
+                    // CRITICAL — see BUGLOG.md CAMPAIGN-BUG-114. phpseclib can
+                    // remain connected with its exec channel open after a
+                    // timeout. Never return that poisoned cached connection.
+                    if ($probe !== false && !$probeTimedOut) {
+                        return ['success' => true, 'connection' => $conn];
+                    }
                 } catch (\Throwable $e) {
                     // Stale or broken — reconnect
                 }
