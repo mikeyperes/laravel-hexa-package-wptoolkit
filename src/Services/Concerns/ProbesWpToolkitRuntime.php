@@ -4,6 +4,7 @@ namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
+use hexa_package_wptoolkit\Support\PersistentState;
 use phpseclib3\Net\SSH2;
 
 trait ProbesWpToolkitRuntime
@@ -154,6 +155,15 @@ trait ProbesWpToolkitRuntime
             return $this->remoteProbeCache[$cacheKey];
         }
 
+        // A usable probe starts WP Toolkit once per candidate (about 7.6 seconds),
+        // so it is kept between requests. Failed probes are never reused.
+        // See BUGLOG.md JOURNALIST-BUG-001.
+        $persistentKey = 'wptoolkit:remote-probe:' . $cacheKey;
+        $persisted = PersistentState::get($persistentKey);
+        if (is_array($persisted) && ($persisted['usable'] ?? false)) {
+            return $this->remoteProbeCache[$cacheKey] = $persisted;
+        }
+
         $settings = $this->runtimeSettings();
         $probe = [
             'transport' => 'ssh',
@@ -248,6 +258,10 @@ trait ProbesWpToolkitRuntime
 
         if (!$probe['usable'] && $probe['error'] === null) {
             $probe['reason'] = 'No usable WP Toolkit binary was found for the SSH user on the target server.';
+        }
+
+        if ($probe['usable']) {
+            PersistentState::put($persistentKey, $probe, 21600);
         }
 
         return $this->remoteProbeCache[$cacheKey] = $probe;

@@ -3,6 +3,29 @@
 Permanent record of critical and high-severity defects in the reusable WP
 Toolkit package.
 
+## JOURNALIST-BUG-001 — WP Toolkit setup repeated on every request (about 15 seconds)
+
+- **Severity:** High
+- **Status:** Fixed in 3.3.8, 2026-09-27 18:04:31 EST (with laravel-hexa-package-wordpress 2.0.84).
+- **Symptom:** Every Publish request that touched a WP Toolkit site spent about
+  15 seconds before its first WordPress command; a journalist profile read took
+  21.7 seconds on a new request.
+- **Root cause:** Nothing expensive survived between requests. Each request
+  unlocked the passphrase-protected SSH key with bcrypt-pbkdf in pure PHP
+  (6.4 s), started WP Toolkit once per binary candidate to probe the runtime
+  (7.6 s), ran `wp-toolkit --info` for the install path (2.5 s) and repeated up
+  to eight shell commands to resolve the native wp-cli command on every
+  evaluation.
+- **Patch:** The unlocked key is cached only as a Crypt-encrypted PKCS8 string
+  keyed by a hash of the stored key and passphrase (`loadServerPrivateKey()`).
+  Successful runtime probes, install paths and resolved native wp-cli commands
+  are kept between requests through `Support\PersistentState`. A cached
+  command is dropped when it cannot start WordPress
+  (`nativeWpCliTargetMissing()`); a failed WordPress operation never
+  invalidates it. Commands themselves are unchanged. A profile read on a new
+  request dropped from 21.7 s to 2.7-3.3 s.
+- **Guard:** `NativeWpCliCacheTest`.
+
 ## CAMPAIGN-BUG-114 — Timed-out liveness probe returned a poisoned SSH connection
 
 - **Severity:** High

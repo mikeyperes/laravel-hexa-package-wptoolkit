@@ -4,6 +4,7 @@ namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
+use hexa_package_wptoolkit\Support\PersistentState;
 use phpseclib3\Net\SSH2;
 
 trait RunsWpCliCommands
@@ -67,11 +68,29 @@ trait RunsWpCliCommands
         return null;
     }
 
+    protected function forgetInstallPath(WhmServer $server, int $installId): void
+    {
+        $cacheKey = $server->id . ':' . $installId;
+        unset($this->installInfoCache[$cacheKey]);
+        PersistentState::forget('wptoolkit:install-info:' . $cacheKey);
+    }
+
     protected function resolveInstallPath(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): ?string
     {
         $cacheKey = $server->id . ':' . $installId;
         if (!empty($this->installInfoCache[$cacheKey]['fullPath'])) {
             return rtrim((string) $this->installInfoCache[$cacheKey]['fullPath'], '/');
+        }
+
+        // `wp-toolkit --info` starts WP Toolkit (about 2.5 seconds); the path of
+        // an installation rarely changes, so it is kept between requests.
+        // See BUGLOG.md JOURNALIST-BUG-001.
+        $persistentKey = 'wptoolkit:install-info:' . $cacheKey;
+        $persisted = PersistentState::get($persistentKey);
+        if (is_array($persisted) && !empty($persisted['fullPath'])) {
+            $this->installInfoCache[$cacheKey] = $persisted;
+
+            return rtrim((string) $persisted['fullPath'], '/');
         }
 
         $escapedId = escapeshellarg((string) $installId);
@@ -89,6 +108,7 @@ trait RunsWpCliCommands
         }
 
         $this->installInfoCache[$cacheKey] = $parsed;
+        PersistentState::put($persistentKey, $parsed, 43200);
 
         return rtrim($fullPath, '/');
     }

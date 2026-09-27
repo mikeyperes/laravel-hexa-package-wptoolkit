@@ -4,6 +4,7 @@ namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
+use hexa_package_wptoolkit\Support\PersistentState;
 use phpseclib3\Net\SSH2;
 
 trait EvaluatesWpCliCode
@@ -61,20 +62,13 @@ trait EvaluatesWpCliCode
         }
 
         $connection = $ssh['connection'];
-        $installPath = $this->resolveInstallPath($server, $connection, $installId);
-        if (!$installPath) {
-            return ['success' => false, 'stdout' => '', 'message' => 'Unable to resolve WordPress install path for direct wp-cli eval.'];
+        $native = $this->resolveNativeWpCli($server, $connection, $installId);
+        if (!($native['success'] ?? false)) {
+            return ['success' => false, 'stdout' => '', 'message' => (string) $native['message']];
         }
-
-        $wpBinary = $this->resolveDirectWpCliBinary($connection);
-        if ($wpBinary === '') {
-            return ['success' => false, 'stdout' => '', 'message' => 'Unable to locate a native wp-cli binary on the target server.'];
-        }
-
-        $nativeCommand = $this->directWpCliCommand($connection, $wpBinary, $installPath);
-        if ($nativeCommand === null) {
-            return ['success' => false, 'stdout' => '', 'message' => 'Unable to resolve the installation owner or CLI PHP binary for native wp-cli.'];
-        }
+        $installPath = (string) $native['install_path'];
+        $wpBinary = (string) $native['wp_binary'];
+        $nativeCommand = (string) $native['command'];
 
         $previousTimeout = $this->commandTimeoutSeconds();
         if (method_exists($connection, 'setTimeout')) {
@@ -95,6 +89,11 @@ trait EvaluatesWpCliCode
         $stdout = trim((string) ($result['clean_output'] ?: $result['raw_output']));
         $success = (int) ($result['exit_code'] ?? 1) === 0
             && !$this->isCommandRefusalOutput($stdout);
+        if (!$success && $this->nativeWpCliTargetMissing((int) ($result['exit_code'] ?? 1), $stdout)) {
+            // The cached command no longer reaches WordPress (moved install,
+            // changed owner or interpreter). Resolve it again next time.
+            $this->forgetNativeWpCli($server, $installId);
+        }
 
         return [
             'success' => $success,
@@ -299,5 +298,75 @@ trait EvaluatesWpCliCode
         }
 
         return $command;
+    }
+
+    /**
+     * Resolve the native wp-cli command for one installation.
+     *
+     * Resolution runs up to eight shell commands (install path, wp binary,
+     * runtime user, owner and CLI interpreter) that used to repeat on every
+     * evaluation. The resolved command is kept between requests and dropped as
+     * soon as it stops reaching WordPress. See BUGLOG.md JOURNALIST-BUG-001.
+     *
+     * @return array{success: bool, message: string, command?: string, wp_binary?: string, install_path?: string}
+     */
+    protected function resolveNativeWpCli(\hexa_package_whm\Models\WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): array
+    {
+        $cacheKey = $this->nativeWpCliCacheKey($server, $installId);
+        $cached = PersistentState::get($cacheKey);
+        if (is_array($cached) && !empty($cached['command']) && !empty($cached['install_path']) && !empty($cached['wp_binary'])) {
+            return ['success' => true, 'message' => 'Native wp-cli command resolved from cache.'] + $cached;
+        }
+
+        $installPath = $this->resolveInstallPath($server, $connection, $installId);
+        if (!$installPath) {
+            return ['success' => false, 'message' => 'Unable to resolve WordPress install path for direct wp-cli eval.'];
+        }
+
+        $wpBinary = $this->resolveDirectWpCliBinary($connection);
+        if ($wpBinary === '') {
+            return ['success' => false, 'message' => 'Unable to locate a native wp-cli binary on the target server.'];
+        }
+
+        $command = $this->directWpCliCommand($connection, $wpBinary, $installPath);
+        if ($command === null) {
+            return ['success' => false, 'message' => 'Unable to resolve the installation owner or CLI PHP binary for native wp-cli.'];
+        }
+
+        $resolved = ['command' => $command, 'wp_binary' => $wpBinary, 'install_path' => $installPath];
+        PersistentState::put($cacheKey, $resolved, 21600);
+
+        return ['success' => true, 'message' => 'Native wp-cli command resolved.'] + $resolved;
+    }
+
+    protected function forgetNativeWpCli(\hexa_package_whm\Models\WhmServer $server, int $installId): void
+    {
+        PersistentState::forget($this->nativeWpCliCacheKey($server, $installId));
+        $this->forgetInstallPath($server, $installId);
+    }
+
+    protected function nativeWpCliCacheKey(\hexa_package_whm\Models\WhmServer $server, int $installId): string
+    {
+        return 'wptoolkit:native-wp-cli:' . $server->id . ':' . $server->hostname . ':' . $installId;
+    }
+
+    /**
+     * True only when the command could not start WordPress at all, so a failed
+     * WordPress operation is never mistaken for a stale cached command.
+     */
+    protected function nativeWpCliTargetMissing(int $exitCode, string $output): bool
+    {
+        if (in_array($exitCode, [126, 127], true)) {
+            return true;
+        }
+
+        $output = strtolower($output);
+        foreach (['does not seem to be a wordpress installation', 'no such file or directory', 'unknown user', 'sudo: a password is required', 'sudo: unknown user'] as $marker) {
+            if (str_contains($output, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

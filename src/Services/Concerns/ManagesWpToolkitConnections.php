@@ -4,6 +4,9 @@ namespace hexa_package_wptoolkit\Services\Concerns;
 
 use hexa_package_whm\Models\WhmServer;
 use hexa_package_wptoolkit\Support\LocalShellConnection;
+use hexa_package_wptoolkit\Support\PersistentState;
+use Illuminate\Support\Facades\Crypt;
+use phpseclib3\Crypt\Common\PrivateKey;
 use phpseclib3\Crypt\PublicKeyLoader;
 use phpseclib3\Net\SSH2;
 
@@ -180,10 +183,7 @@ trait ManagesWpToolkitConnections
             // Try SSH key first
             if (!empty($server->ssh_private_key)) {
                 try {
-                    $key = PublicKeyLoader::load(
-                        $server->ssh_private_key,
-                        $server->ssh_key_passphrase ?: false
-                    );
+                    $key = $this->loadServerPrivateKey($server);
                     if ($ssh->login($username, $key)) {
                         $this->generic->log('info', '[WpToolkit] SSH key auth succeeded');
                         return ['success' => true, 'connection' => $ssh];
@@ -279,4 +279,47 @@ trait ManagesWpToolkitConnections
         return $binary !== '' ? $binary : null;
     }
 
+    /**
+     * Unlock the server's SSH key once and reuse it across requests.
+     *
+     * The stored OpenSSH key is passphrase-protected with bcrypt-pbkdf, which
+     * phpseclib unlocks in pure PHP in about 6.4 seconds on every request. The
+     * unlocked key is cached only as a Crypt-encrypted PKCS8 string, protected
+     * by the same application key that already encrypts the stored key and its
+     * passphrase. The cache key is derived from the stored material, so a new
+     * key or passphrase is picked up immediately. See BUGLOG.md JOURNALIST-BUG-001.
+     */
+    protected function loadServerPrivateKey(WhmServer $server): PrivateKey
+    {
+        $material = (string) $server->ssh_private_key;
+        $passphrase = (string) ($server->ssh_key_passphrase ?? '');
+        $cacheKey = 'wptoolkit:ssh-key:' . $server->id . ':' . hash('sha256', $material . "\0" . $passphrase);
+
+        try {
+            $cached = PersistentState::get($cacheKey);
+            if (is_string($cached) && $cached !== '') {
+                $key = PublicKeyLoader::load(Crypt::decryptString($cached));
+                if ($key instanceof PrivateKey) {
+                    return $key;
+                }
+            }
+        } catch (\Throwable) {
+            PersistentState::forget($cacheKey);
+        }
+
+        $key = PublicKeyLoader::load($material, $passphrase !== '' ? $passphrase : false);
+        if (!$key instanceof PrivateKey) {
+            throw new \RuntimeException('The stored SSH key is not a private key.');
+        }
+
+        try {
+            // phpseclib keeps the passphrase on the key and would re-encrypt the
+            // export with it; the cached copy is protected by Crypt instead.
+            PersistentState::put($cacheKey, Crypt::encryptString($key->withPassword(false)->toString('PKCS8')), 86400);
+        } catch (\Throwable) {
+            // The unlocked key is still usable for this request.
+        }
+
+        return $key;
+    }
 }
