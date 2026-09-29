@@ -31,6 +31,10 @@ class WpToolkitServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        if ($this->app->runningInConsole()) {
+            $this->commands([\hexa_package_wptoolkit\Console\Commands\MediaScanCommand::class]);
+        }
+
         $this->loadRoutesFrom(__DIR__ . '/../../routes/wptoolkit.php');
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'wptoolkit');
         $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
