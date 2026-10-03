@@ -81,10 +81,14 @@ add_action('init', function() {
         wp_die('Login link expired.');
     }
     $user = get_user_by('login', $wp_user);
-    if (!$user) { @unlink(__FILE__); wp_die('User not found.'); }
+    if (!$user || !in_array('administrator', (array) $user->roles, true)) {
+        @unlink(__FILE__);
+        wp_die('Administrator not found.');
+    }
+    // Unlink is atomic: only one request can consume this file successfully.
+    if (!@unlink(__FILE__)) wp_die('Login link already used or unavailable.');
     wp_set_auth_cookie($user->ID, true);
     wp_set_current_user($user->ID);
-    @unlink(__FILE__);
     wp_safe_redirect(admin_url('__REDIRECT__'));
     exit;
 }, 1);
@@ -105,6 +109,7 @@ PHP;
         $escapedFile = escapeshellarg($filePath);
 
         $cmd = "mkdir -p " . escapeshellarg($muDir)
+            . " && chown {$escapedUser}:{$escapedUser} " . escapeshellarg($muDir)
             . " && printf %s " . escapeshellarg($b64) . " | base64 -d > {$escapedFile}"
             . " && chown {$escapedUser}:{$escapedUser} {$escapedFile}"
             . " && chmod 644 {$escapedFile}"
@@ -160,24 +165,51 @@ PHP;
         string $wpPath,
         string $username,
         string $siteUrl,
+        string $preferredUser = '',
     ): array {
-        $credentials = $this->getCredentials($server, $installId, $wpPath, $username);
-        if (! ($credentials['success'] ?? false)) {
-            return ['success' => false, 'error' => 'Could not resolve the preferred administrator.'];
-        }
-        $preferred = array_values(array_filter(
-            $credentials['admin_users'] ?? [],
-            static fn (array $user): bool => (bool) ($user['is_default_login'] ?? false),
-        ));
-        if (count($preferred) !== 1) {
-            return ['success' => false, 'error' => 'No unique preferred administrator; specify the intended user.'];
-        }
-        $wpUser = $preferred[0]['user_login'] ?? $preferred[0]['username'] ?? null;
-        if (! is_string($wpUser) || $wpUser === '') {
-            return ['success' => false, 'error' => 'The preferred administrator binding is missing.'];
+        $ssh = $this->getConnection($server);
+        if (! ($ssh['success'] ?? false)) {
+            return ['success' => false, 'error' => 'Unable to connect to the WordPress host.'];
         }
 
-        return $this->generateWordPressLoginUrl($server, $wpPath, $username, $wpUser, $siteUrl);
+        try {
+            if ($preferredUser === '') {
+                // Read only the preferred username, never passwords or DB credentials.
+                $query = 'SELECT value FROM InstanceProperties WHERE instanceId = '.(int) $installId
+                    ." AND name = 'login' LIMIT 1";
+                $stored = $this->runCommandWithExitCode($ssh['connection'],
+                    'sqlite3 /usr/local/cpanel/3rdparty/wp-toolkit/var/wp-toolkit.sqlite3 '.escapeshellarg($query).' 2>/dev/null');
+                if (($stored['exit_code'] ?? 1) === 0) {
+                    $preferredUser = trim((string) ($stored['clean_output'] ?? ''));
+                }
+            }
+
+            $php = str_replace('__PREFERRED__', var_export($preferredUser, true), <<<'PHP'
+$preferred = __PREFERRED__;
+if ($preferred !== '') {
+    $user = get_user_by('login', $preferred);
+} else {
+    $ids = get_users(['role' => 'administrator', 'number' => 2, 'fields' => 'ID',
+        'count_total' => false, 'cache_results' => false]);
+    $user = count($ids) === 1 ? get_user_by('id', $ids[0]) : false;
+}
+if (!$user || !in_array('administrator', (array) $user->roles, true)) {
+    echo wp_json_encode(['success' => false,
+        'error' => 'No unique valid administrator; specify the intended user.']);
+} else {
+    echo wp_json_encode(['success' => true, 'wp_user' => $user->user_login]);
+}
+PHP);
+            $lookup = $this->wpCliEval($server, $installId, $php);
+            $admin = ($lookup['success'] ?? false) ? $this->extractJsonObject($lookup['stdout'] ?? '') : null;
+            if (! ($admin['success'] ?? false) || empty($admin['wp_user'])) {
+                return ['success' => false, 'error' => $admin['error'] ?? 'Could not resolve the intended administrator.'];
+            }
+
+            return $this->generateWordPressLoginUrl($server, $wpPath, $username, $admin['wp_user'], $siteUrl);
+        } finally {
+            $this->disconnectCachedConnection($server);
+        }
     }
 
     /**

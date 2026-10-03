@@ -3,6 +3,33 @@
 Permanent record of critical and high-severity defects in the reusable WP
 Toolkit package.
 
+## LOGIN-BUG-001 — Login-only generation inventoried unrelated credentials
+
+- **Severity:** High
+- **Status:** Fixed in the next package release.
+- **Symptom:** A link request ran a full administrator/credential inventory,
+  WP Toolkit info and database-credential reads before writing the bootstrap.
+- **Root cause:** The login method reused the dashboard's `getCredentials()`;
+  its default-user fallback could silently select a different administrator.
+- **Patch:** Read only the preferred username and perform one bounded WordPress
+  administrator lookup, preserving the connection through bootstrap creation.
+  An invalid preferred user fails instead of selecting another person. The thin
+  `wptoolkit:login` command reuses exact bindings and issues requested links in
+  one application process through the existing services.
+- **Guard:** The login-only method does not call `getCredentials()`; existing
+  runtime/SSH incident guards remain intact. Tests were not requested.
+
+## LOGIN-BUG-002 — WordPress bootstrap authenticated before consuming the link
+
+- **Severity:** High
+- **Status:** Fixed in the next package release.
+- **Root cause:** Authentication preceded best-effort deletion, allowing
+  concurrent clicks or deletion failure to bypass single-use consumption.
+- **Patch:** Require successful atomic unlink before issuing authentication
+  cookies, own the bootstrap directory as the cPanel account so it can consume
+  the file, and require the selected user to remain an administrator.
+- **Guard:** Consumption failure stops authentication. Tests were not requested.
+
 ## JOURNALIST-BUG-001 — WP Toolkit setup repeated on every request (about 15 seconds)
 
 - **Severity:** High
