@@ -60,7 +60,7 @@ trait ManagesLogins
         $connection = $ssh['connection'];
 
         $token = bin2hex(random_bytes(32));
-        $ttl = 300; // 5 minutes
+        $ttl = 3600; // 60 minutes
         $expiry = time() + $ttl;
 
         $muPlugin = <<<'PHP'
@@ -150,9 +150,40 @@ PHP;
     }
 
     /**
+     * Resolve the existing preferred administrator and generate its login in one call.
+     * Callers supply an exact installation binding from managed inventory.
+     * Credential-bearing discovery results remain inside the service.
+     */
+    public function generateWordPressLoginUrlForInstall(
+        WhmServer $server,
+        int $installId,
+        string $wpPath,
+        string $username,
+        string $siteUrl,
+    ): array {
+        $credentials = $this->getCredentials($server, $installId, $wpPath, $username);
+        if (! ($credentials['success'] ?? false)) {
+            return ['success' => false, 'error' => 'Could not resolve the preferred administrator.'];
+        }
+        $preferred = array_values(array_filter(
+            $credentials['admin_users'] ?? [],
+            static fn (array $user): bool => (bool) ($user['is_default_login'] ?? false),
+        ));
+        if (count($preferred) !== 1) {
+            return ['success' => false, 'error' => 'No unique preferred administrator; specify the intended user.'];
+        }
+        $wpUser = $preferred[0]['user_login'] ?? $preferred[0]['username'] ?? null;
+        if (! is_string($wpUser) || $wpUser === '') {
+            return ['success' => false, 'error' => 'The preferred administrator binding is missing.'];
+        }
+
+        return $this->generateWordPressLoginUrl($server, $wpPath, $username, $wpUser, $siteUrl);
+    }
+
+    /**
      * Generate a one-click cPanel login URL for a cPanel account.
      *
-     * Uses the WHM API create_user_session via the billing WhmService.
+     * Issues a 60-minute single-use link; WhmService creates the native session on click.
      *
      * @param WhmServer $server   The WHM server
      * @param string    $username The cPanel username
@@ -164,14 +195,13 @@ PHP;
             'server' => $server->name, 'username' => $username,
         ]);
 
-        return $this->whm->createCpanelSession($server, $username);
+        return $this->whm->createLoginLink($server, $username, 'cpaneld');
     }
 
     /**
      * Generate a one-click WHM reseller login URL.
      *
-     * Uses the WHM API create_user_session with service=whostmgrd
-     * via the billing WhmService.
+     * Issues a 60-minute single-use link for a fresh WHM session on click.
      *
      * @param WhmServer $server   The WHM server
      * @param string    $username The reseller username
@@ -183,7 +213,7 @@ PHP;
             'server' => $server->name, 'username' => $username,
         ]);
 
-        return $this->whm->createWhmSession($server, $username);
+        return $this->whm->createLoginLink($server, $username, 'whostmgrd');
     }
 
     /**
