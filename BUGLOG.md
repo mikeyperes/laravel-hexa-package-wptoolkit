@@ -3,6 +3,24 @@
 Permanent record of critical and high-severity defects in the reusable WP
 Toolkit package.
 
+## WPTOOLKIT-BUG-003 — Words in site content turned successful commands into failures
+
+- **Severity:** High
+- **Status:** Fixed in 3.3.11.
+- **Symptom:** Reading every page of herforward.com failed with "Direct wp-cli
+  eval failed" although WP-CLI exited 0 and printed the whole payload. Batches
+  2 and 5 of 7 failed; the others passed.
+- **Impact:** Any command whose returned data mentioned "permission denied",
+  "fatal error", "parse error" or "not authorized" (for example a news article
+  about a cyberattack) was reported as failed, so whole-site SEO reads stopped.
+- **Root cause:** `isCommandRefusalOutput()` searched the entire output,
+  including returned site content, for refusal phrases.
+- **Patch:** Only message lines are checked; a data line (JSON, optionally
+  after a `MARKER:` prefix) is skipped. Shell, WP-CLI and PHP fatal messages
+  are still caught on their own lines.
+- **Guard:** `tests/Unit/CommandRefusalOutputTest.php` and the
+  `WPTOOLKIT-BUG-003` docblock on `isCommandRefusalOutput()`.
+
 ## LOGIN-BUG-001 — Login-only generation inventoried unrelated credentials
 
 - **Severity:** High

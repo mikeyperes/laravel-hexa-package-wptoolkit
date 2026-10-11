@@ -312,25 +312,33 @@ trait ResolvesWpToolkitRuntime
         return get_current_user() ?: 'unknown';
     }
 
+    /**
+     * True when the shell or WP-CLI itself refused or crashed. Only message
+     * lines are checked: a returned data line (JSON, optionally after a
+     * MARKER: prefix) is site content, and an article that mentions
+     * "permission denied" is not a refusal (WPTOOLKIT-BUG-003).
+     */
     protected function isCommandRefusalOutput(string $output): bool
     {
-        $normalized = strtolower(trim($output));
-        if ($normalized === '') {
-            return false;
-        }
+        foreach (preg_split('/\R/', strtolower($output)) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || preg_match('/^(?:[a-z0-9_]+:)?\s*[\[{]/', $line) === 1) {
+                continue;
+            }
 
-        foreach ([
-            'cannot be run as root',
-            'permission denied',
-            'not authorized',
-            'you are not authorized',
-            '/var/.cagefs',
-            'cagefs.token',
-            'fatal error',
-            'parse error',
-        ] as $marker) {
-            if (str_contains($normalized, $marker)) {
-                return true;
+            foreach ([
+                'cannot be run as root',
+                'permission denied',
+                'not authorized',
+                'you are not authorized',
+                '/var/.cagefs',
+                'cagefs.token',
+                'fatal error',
+                'parse error',
+            ] as $marker) {
+                if (str_contains($line, $marker)) {
+                    return true;
+                }
             }
         }
 
