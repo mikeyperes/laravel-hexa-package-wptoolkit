@@ -91,3 +91,11 @@ Toolkit package.
 - **Guard:** `CRITICAL — see BUGLOG.md CAMPAIGN-BUG-114` in
   `ManagesWpToolkitConnections::getConnection()` must continue to reject a
   cached connection after any unsuccessful liveness probe.
+
+## WPT-PLUGIN-VERSION (high) - 2026-10-15
+
+- Symptom: `ensurePluginInstalledAndActive($server, $id, 'all-in-one-wp-migration', '7.110')` left 7.112 in place on a site that already had the plugin.
+- Impact: the newer migration plugin refused the stored Unlimited extension ("out of date"), so the eagleswill.com restore failed until the version was forced by hand.
+- Root cause: the requested version was used only when the plugin was missing.
+- Patch: when a version is given and the installed version differs, reinstall that exact version with `--force`.
+- Guard: `ManagesWpToolkitOperations::ensurePluginInstalledAndActive`, marked `CRITICAL — see BUGLOG.md WPT-PLUGIN-VERSION`.

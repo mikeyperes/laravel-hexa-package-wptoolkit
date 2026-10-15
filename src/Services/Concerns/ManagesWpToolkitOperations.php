@@ -112,7 +112,32 @@ trait ManagesWpToolkitOperations
                 ];
             }
         } else {
-            $steps[] = ['action' => 'install', 'success' => true, 'output' => 'Plugin was already installed.'];
+            $current = $this->runCommandWithExitCode($connection, "{$base} plugin get {$slug} --field=version 2>&1");
+            $currentVersion = trim((string) ($current['clean_output'] ?? ''));
+            if ($version !== '' && $currentVersion !== $version) {
+                // CRITICAL — see BUGLOG.md WPT-PLUGIN-VERSION: a requested version must replace a different installed one.
+                $reinstall = $this->runCommandWithExitCode(
+                    $connection,
+                    "{$base} plugin install {$slug} --version=" . escapeshellarg($version) . ' --force 2>&1'
+                );
+                $steps[] = [
+                    'action' => 'install',
+                    'success' => (int) ($reinstall['exit_code'] ?? 1) === 0,
+                    'output' => (string) ($reinstall['clean_output'] ?? ''),
+                ];
+                if ((int) ($reinstall['exit_code'] ?? 1) !== 0) {
+                    return [
+                        'success' => false,
+                        'message' => "Failed to install {$pluginSlug} {$version} over installed {$currentVersion}.",
+                        'installed' => true,
+                        'active' => false,
+                        'steps' => $steps,
+                    ];
+                }
+                $wasInstalled = false;
+            } else {
+                $steps[] = ['action' => 'install', 'success' => true, 'output' => 'Plugin was already installed.'];
+            }
         }
 
         $activeCheck = $this->runCommandWithExitCode($connection, "{$base} plugin is-active {$slug} 2>&1");
