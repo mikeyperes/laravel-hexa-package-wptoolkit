@@ -71,6 +71,8 @@ trait EvaluatesWpCliCode
         $nativeCommand = (string) $native['command'];
 
         $previousTimeout = $this->commandTimeoutSeconds();
+        $previousOverride = $this->commandTimeoutOverride;
+        $this->commandTimeoutOverride = max(10, $timeout);
         if (method_exists($connection, 'setTimeout')) {
             $connection->setTimeout(max(10, $timeout));
         }
@@ -81,6 +83,7 @@ trait EvaluatesWpCliCode
                 . $nativeCommand . ' eval "$CODE" 2>&1';
             $result = $this->runCommandWithExitCode($connection, $cmd);
         } finally {
+            $this->commandTimeoutOverride = $previousOverride;
             if (method_exists($connection, 'setTimeout')) {
                 $connection->setTimeout($previousTimeout);
             }

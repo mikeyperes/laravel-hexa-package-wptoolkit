@@ -12,9 +12,13 @@ use phpseclib3\Net\SSH2;
 
 trait ManagesWpToolkitConnections
 {
+    /** A longer limit one operation asked for; every command it runs keeps it until the operation ends. */
+    protected ?int $commandTimeoutOverride = null;
+
     public function commandTimeoutSeconds(): int
     {
-        return max(10, (int) config('wptoolkit.ssh.timeout', 120));
+        // CRITICAL - see BUGLOG.md WPT-TIMEOUT-RESET: a per-call limit must survive execWithConnection().
+        return $this->commandTimeoutOverride ?? max(10, (int) config('wptoolkit.ssh.timeout', 120));
     }
 
     protected function connectionCacheKey(WhmServer $server): string

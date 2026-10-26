@@ -99,3 +99,12 @@ Toolkit package.
 - Root cause: the requested version was used only when the plugin was missing.
 - Patch: when a version is given and the installed version differs, reinstall that exact version with `--force`.
 - Guard: `ManagesWpToolkitOperations::ensurePluginInstalledAndActive`, marked `CRITICAL — see BUGLOG.md WPT-PLUGIN-VERSION`.
+
+
+## WPT-TIMEOUT-RESET - 2026-10-26
+
+- Symptom: `wpCliEvalWithPlugins(..., 600)` failed with "WP Toolkit SSH command timed out after 120 seconds" while the remote command kept running and finished.
+- Impact: long WordPress clean-ups (deleting thousands of events) reported failure although they succeeded; a caller could repeat a destructive step.
+- Root cause: `execWithConnection()` reset the connection timeout to `commandTimeoutSeconds()` (the 120 s default) before every command, overriding the per-call limit.
+- Fix: a per-call `commandTimeoutOverride` that `commandTimeoutSeconds()` returns while the operation runs, restored in `finally`.
+- Guard: `CRITICAL - see BUGLOG.md WPT-TIMEOUT-RESET` in `ManagesWpToolkitConnections::commandTimeoutSeconds()`.
