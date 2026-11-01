@@ -35,8 +35,14 @@ class WpToolkitServiceProvider extends ServiceProvider
             $this->commands([
                 \hexa_package_wptoolkit\Console\Commands\MediaScanCommand::class,
                 \hexa_package_wptoolkit\Console\Commands\LoginCommand::class,
+                \hexa_package_wptoolkit\Console\Commands\RegisterUnlistedCommand::class,
             ]);
         }
+
+        // A full sweep for sites WP Toolkit never listed, in the background, at most once every 14 days.
+        $this->callAfterResolving(\Illuminate\Console\Scheduling\Schedule::class, function ($schedule) {
+            $schedule->command('wptoolkit:register-unlisted --if-due')->daily()->withoutOverlapping()->runInBackground();
+        });
 
         $this->loadRoutesFrom(__DIR__ . '/../../routes/wptoolkit.php');
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'wptoolkit');

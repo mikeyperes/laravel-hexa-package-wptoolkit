@@ -68,14 +68,6 @@ trait ManagesInstalls
             return array_merge($parsed, ['raw_output' => $output]);
         }
 
-        // A WordPress site on an addon or sub domain that WP Toolkit never registered is invisible to every tool
-        // (wealthdefined.com, 2026-11-01): register each one found, then list again.
-        if ($this->registerUnlistedInstalls($connection, $wptBin, $parsed['installs'])) {
-            $relisted = $this->parseWpToolkitAllOutput($connection->exec($cmd));
-            if ($relisted['success']) {
-                $parsed = $relisted;
-            }
-        }
         $connection->disconnect();
 
         $this->generic->log('info', '[WpToolkit] getAllInstalls complete', [
@@ -336,7 +328,34 @@ trait ManagesInstalls
      * @param array<int, array<string, mixed>> $installs
      * @return list<string>
      */
-    private function registerUnlistedInstalls($connection, string $wptBin, array $installs): array
+    /**
+     * Find WordPress sites on this server's domains that WP Toolkit does not list (an addon or sub domain it never
+     * registered, such as wealthdefined.com on 2026-11-01) and register them. With $domain, only that domain.
+     *
+     * @return array{success: bool, registered?: list<string>, listed?: bool, error?: string}
+     */
+    public function registerUnlistedSites(WhmServer $server, ?string $domain = null): array
+    {
+        $ssh = $this->getConnection($server);
+        if (!$ssh['success']) {
+            return $ssh;
+        }
+        $connection = $ssh['connection'];
+        $wptBin = $this->shellBinary($connection, $server);
+        $parsed = $this->parseWpToolkitAllOutput($connection->exec("{$wptBin} --list -format json 2>&1"));
+        if (!$parsed['success']) {
+            $connection->disconnect();
+            return $parsed;
+        }
+        $only = $domain !== null ? strtolower(preg_replace('/^www\\./', '', trim($domain))) : null;
+        $listed = $only !== null && in_array($only, array_map(fn ($i) => strtolower(preg_replace('/^www\\./', '', (string) parse_url((string) ($i['url'] ?? ''), PHP_URL_HOST))), $parsed['installs']), true);
+        $registered = $listed ? [] : $this->registerUnlistedInstalls($connection, $wptBin, $parsed['installs'], $only);
+        $connection->disconnect();
+
+        return ['success' => true, 'registered' => $registered, 'listed' => $listed];
+    }
+
+    private function registerUnlistedInstalls($connection, string $wptBin, array $installs, ?string $only = null): array
     {
         $known = [];
         foreach ($installs as $install) {
@@ -353,7 +372,7 @@ trait ManagesInstalls
             $fields = explode('==', $m[2]);
             $domain = strtolower($m[1]);
             $docroot = (string) ($fields[4] ?? '');
-            if (isset($known[$domain]) || str_starts_with($domain, 'www.') || !in_array($fields[2] ?? '', ['main', 'addon', 'sub'], true)
+            if (($only !== null && $domain !== $only) || isset($known[$domain]) || str_starts_with($domain, 'www.') || !in_array($fields[2] ?? '', ['main', 'addon', 'sub'], true)
                 || !preg_match('#^/home\d*/[^/]+/#', $docroot)) {
                 continue;
             }
