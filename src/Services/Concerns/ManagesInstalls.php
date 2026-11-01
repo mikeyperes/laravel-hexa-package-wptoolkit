@@ -55,7 +55,6 @@ trait ManagesInstalls
 
         $this->generic->log('info', '[WpToolkit] Executing command', ['command' => $cmd]);
         $output = $connection->exec($cmd);
-        $connection->disconnect();
 
         $this->generic->log('info', '[WpToolkit] Raw output received', [
             'output_length' => strlen($output),
@@ -65,8 +64,19 @@ trait ManagesInstalls
         $parsed = $this->parseWpToolkitAllOutput($output);
 
         if (!$parsed['success']) {
+            $connection->disconnect();
             return array_merge($parsed, ['raw_output' => $output]);
         }
+
+        // A WordPress site on an addon or sub domain that WP Toolkit never registered is invisible to every tool
+        // (wealthdefined.com, 2026-11-01): register each one found, then list again.
+        if ($this->registerUnlistedInstalls($connection, $wptBin, $parsed['installs'])) {
+            $relisted = $this->parseWpToolkitAllOutput($connection->exec($cmd));
+            if ($relisted['success']) {
+                $parsed = $relisted;
+            }
+        }
+        $connection->disconnect();
 
         $this->generic->log('info', '[WpToolkit] getAllInstalls complete', [
             'server'        => $server->name,
@@ -319,4 +329,52 @@ trait ManagesInstalls
         ];
     }
 
+    /**
+     * Register in WP Toolkit every WordPress site whose domain (main, addon or sub, from cPanel's domain list)
+     * holds a wp-config.php but is not in the list yet. Returns the domains registered.
+     *
+     * @param array<int, array<string, mixed>> $installs
+     * @return list<string>
+     */
+    private function registerUnlistedInstalls($connection, string $wptBin, array $installs): array
+    {
+        $known = [];
+        foreach ($installs as $install) {
+            $host = strtolower(preg_replace('/^www\\./', '', (string) parse_url((string) ($install['url'] ?? ''), PHP_URL_HOST)));
+            if ($host !== '') {
+                $known[$host] = true;
+            }
+        }
+        $candidates = [];
+        foreach (explode("\n", (string) $connection->exec('cat /etc/userdatadomains 2>/dev/null')) as $line) {
+            if (!preg_match('/^([a-z0-9.-]+):\s*(.+)$/i', trim($line), $m)) {
+                continue;
+            }
+            $fields = explode('==', $m[2]);
+            $domain = strtolower($m[1]);
+            $docroot = (string) ($fields[4] ?? '');
+            if (isset($known[$domain]) || str_starts_with($domain, 'www.') || !in_array($fields[2] ?? '', ['main', 'addon', 'sub'], true)
+                || !preg_match('#^/home\d*/[^/]+/#', $docroot)) {
+                continue;
+            }
+            $candidates[$docroot] = $domain;
+        }
+        if (!$candidates) {
+            return [];
+        }
+        $check = 'for d in ' . implode(' ', array_map('escapeshellarg', array_keys($candidates))) . '; do [ -f "$d/wp-config.php" ] && echo "$d"; done';
+        $added = [];
+        foreach (array_filter(explode("\n", (string) $connection->exec($check))) as $docroot) {
+            $domain = $candidates[trim($docroot)] ?? null;
+            if ($domain === null) {
+                continue;
+            }
+            $result = (string) $connection->exec($wptBin . ' --register -domain-name ' . escapeshellarg($domain) . ' -path / -format json 2>&1');
+            $this->generic->log('info', '[WpToolkit] Registered an unlisted WordPress site', ['domain' => $domain, 'result' => mb_substr($result, 0, 300)]);
+            if (preg_match('/"id"\s*:\s*\d+/', $result)) {
+                $added[] = $domain;
+            }
+        }
+        return $added;
+    }
 }
