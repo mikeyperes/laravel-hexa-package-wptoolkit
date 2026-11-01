@@ -96,9 +96,19 @@ trait RunsWpCliCommands
         $escapedId = escapeshellarg((string) $installId);
         $info = $this->runCommandWithExitCode($connection, $this->shellBinary($connection, $server) . " --info -instance-id {$escapedId} -format json 2>&1");
         $parsed = json_decode((string) ($info['clean_output'] ?: $info['raw_output']), true);
+        // CRITICAL - see BUGLOG.md WPTOOLKIT-NATIVE-004
         $fullPath = $parsed['fullPath'] ?? null;
-
-        if (!is_string($fullPath) || trim($fullPath) === '') {
+        if (!is_string($fullPath) || !str_starts_with($fullPath, '/') || str_contains($fullPath, "\n")) {
+            // New Toolkit --info uses a home-relative path, such as /public_html.
+            // Reuse the existing full inventory parser instead of treating it as absolute.
+            $listed = $this->runCommandWithExitCode($connection, $this->shellBinary($connection, $server)." --list -format json 2>&1");
+            $inventory = $this->parseWpToolkitAllOutput((string) ($listed['clean_output'] ?: $listed['raw_output']));
+            foreach ($inventory['installs'] ?? [] as $installation) {
+                if ((int) ($installation['id'] ?? 0) === $installId) { $fullPath = $installation['path'] ?? null; break; }
+            }
+        }
+        if (is_string($fullPath) && str_starts_with($fullPath, '/') && !preg_match('/[\r\n\x00]/', $fullPath)) $parsed['fullPath'] = $fullPath;
+        if (!is_string($fullPath) || !str_starts_with($fullPath, '/') || $fullPath === '/' || preg_match('/[\r\n\x00]/', $fullPath)) {
             $this->generic->log('error', '[WpToolkit] resolveInstallPath failed', [
                 'install_id' => $installId,
                 'exit_code' => $info['exit_code'],

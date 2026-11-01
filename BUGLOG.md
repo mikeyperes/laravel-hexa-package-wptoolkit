@@ -108,3 +108,9 @@ Toolkit package.
 - Root cause: `execWithConnection()` reset the connection timeout to `commandTimeoutSeconds()` (the 120 s default) before every command, overriding the per-call limit.
 - Fix: a per-call `commandTimeoutOverride` that `commandTimeoutSeconds()` returns while the operation runs, restored in `finally`.
 - Guard: `CRITICAL - see BUGLOG.md WPT-TIMEOUT-RESET` in `ManagesWpToolkitConnections::commandTimeoutSeconds()`.
+
+## WPTOOLKIT-NATIVE-004 (high): native evaluation assumed --info always returned fullPath
+- Symptom: existing WordPress installations failed native path resolution while Toolkit CLI worked.
+- Root cause: --info can return path=/public_html rather than fullPath; treating that as an absolute host path would also be incorrect.
+- Patch: use fullPath when present; otherwise reuse the existing full-inventory parser and match the exact installation ID to obtain its absolute path. Cache the normalized result.
+- Guard: NativeInstallPathTest covers relative metadata, both installation IDs, old absolute metadata, caching and unknown-ID refusal.
