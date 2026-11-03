@@ -125,3 +125,14 @@ Toolkit package.
 - Root cause: Local binary checks ran as the application user against a root-only vendor launcher, even though the established privileged local bridge was available. Auto mode consequently selected SSH without usable stored authentication.
 - Patch: Local connections explicitly use the existing bridge when available; binary probes use that same execution context. Native WP-CLI reuses the existing installation-owner and CLI-PHP resolver instead of the CGI PHP from PATH, and existing filesystem operations avoid double wrapping. Author listing checks command exit and JSON parsing so a failed command cannot become a successful empty cached directory. Vendor permissions, SSH credentials and campaign settings remain unchanged.
 - Guard: The explicit LocalShellConnection privileged flag binds probe and execution context. Operational recovery reads the previously failing author directory through the normal campaign service.
+
+
+## WPTOOLKIT-LOCAL-006 - Privileged shell PATH selected CGI PHP for uncached sites
+
+- Severity: High.
+- Status: Fixed in 3.3.15.
+- Symptom: Grit Daily and Block Telegraph failed before sourcing with campaign_smp_manifest_unavailable after local transport was restored.
+- Impact: A live publication manifest could not be evaluated; the generic manifest error hid an interpreter-resolution failure.
+- Root cause: Native command resolution probed unqualified php inside the privileged login shell, which resolved to php-cgi. A previously cached native command let Breaking9to5 pass while uncached sites failed.
+- Patch: For same-host execution, probe the application's CLI binary and its PHP installation's CLI sibling before PATH. Require an actual cli SAPI and bind its absolute path for every user context. Remote resolution continues to use the remote interpreter. Version the native command cache key so old commands cannot retain ambiguous PHP resolution.
+- Guard: directWpCliCommand verifies CLI SAPI before constructing commands and fails closed if no supported candidate works. Read the formerly failing manifest through the normal WordPress manager after release.

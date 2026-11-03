@@ -10,7 +10,7 @@
 
 ## Local execution
 
-On a same-host application, the existing noninteractive privilege bridge executes local Toolkit commands when available. Runtime probes use that same context, so root-only vendor launchers do not force an unnecessary SSH fallback. Native commands reuse the installation-owner and CLI-PHP resolver; failed author commands are never cached as empty success. No vendor permissions or stored SSH credentials are changed; an unavailable bridge or failed probe remains a failure.
+On a same-host application, the existing noninteractive privilege bridge executes local Toolkit commands when available. Runtime probes use that same context, so root-only vendor launchers do not force an unnecessary SSH fallback. Native commands reuse the installation-owner and CLI-PHP resolver, verifying the local application PHP installation before shell PATH and caching only commands with an explicit CLI interpreter; failed author commands are never cached as empty success. No vendor permissions or stored SSH credentials are changed; an unavailable bridge or failed probe remains a failure.
 
 ## Native installation paths
 

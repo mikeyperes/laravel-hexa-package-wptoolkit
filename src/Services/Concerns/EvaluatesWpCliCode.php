@@ -116,7 +116,33 @@ trait EvaluatesWpCliCode
             return null;
         }
 
-        $command = escapeshellarg($wpBinary) . ' --path=' . escapeshellarg($installPath);
+        // CRITICAL - see BUGLOG.md WPTOOLKIT-LOCAL-006. A login shell may
+        // resolve php to CGI. Probe the local PHP installation's CLI sibling
+        // before PATH, and use the verified binary even without a user switch.
+        $candidates = $connection instanceof LocalShellConnection
+            ? array_values(array_unique(array_filter([
+                PHP_SAPI === 'cli' ? PHP_BINARY : null,
+                PHP_BINDIR . '/php',
+                'php',
+            ])))
+            : ['php'];
+        $phpBinary = null;
+        foreach ($candidates as $candidate) {
+            $phpResult = $this->runCommandWithExitCode(
+                $connection,
+                escapeshellarg($candidate) . ' -r ' . escapeshellarg('if (PHP_SAPI === "cli") { echo PHP_BINARY; } else { exit(1); }')
+            );
+            $resolved = trim((string) ($phpResult['clean_output'] ?: $phpResult['raw_output']));
+            if (($phpResult['exit_code'] ?? 1) === 0 && str_starts_with($resolved, '/') && !preg_match('/[\r\n]/', $resolved)) {
+                $phpBinary = $resolved;
+                break;
+            }
+        }
+        if ($phpBinary === null) {
+            return null;
+        }
+
+        $command = escapeshellarg($phpBinary) . ' ' . escapeshellarg($wpBinary) . ' --path=' . escapeshellarg($installPath);
         if ($uid !== '0') {
             return $command;
         }
@@ -132,15 +158,7 @@ trait EvaluatesWpCliCode
             return $command . ' --allow-root';
         }
 
-        // sudo may replace PATH with a cPanel CGI PHP. Retain the proven CLI
-        // interpreter from the original execution context explicitly.
-        $phpResult = $this->runCommandWithExitCode($connection, 'php -r ' . escapeshellarg('if (PHP_SAPI === "cli") { echo PHP_BINARY; }'));
-        $phpBinary = trim((string) ($phpResult['clean_output'] ?: $phpResult['raw_output']));
-        if ((int) ($phpResult['exit_code'] ?? 1) !== 0 || !str_starts_with($phpBinary, '/') || preg_match('/[\r\n]/', $phpBinary)) {
-            return null;
-        }
-
-        return 'sudo -n -u ' . escapeshellarg($owner) . ' -- ' . escapeshellarg($phpBinary) . ' ' . $command;
+        return 'sudo -n -u ' . escapeshellarg($owner) . ' -- ' . $command;
     }
 
     protected function resolveDirectWpCliBinary(SSH2|LocalShellConnection $connection): string
@@ -350,7 +368,7 @@ trait EvaluatesWpCliCode
 
     protected function nativeWpCliCacheKey(\hexa_package_whm\Models\WhmServer $server, int $installId): string
     {
-        return 'wptoolkit:native-wp-cli:' . $server->id . ':' . $server->hostname . ':' . $installId;
+        return 'wptoolkit:native-wp-cli:cli-v2:' . $server->id . ':' . $server->hostname . ':' . $installId;
     }
 
     /**
