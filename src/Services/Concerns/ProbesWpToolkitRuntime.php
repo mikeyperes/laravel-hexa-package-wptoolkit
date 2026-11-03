@@ -16,7 +16,7 @@ trait ProbesWpToolkitRuntime
         }
 
         $settings = $this->runtimeSettings();
-        $connection = new LocalShellConnection(base_path());
+        $connection = new LocalShellConnection(base_path(), $this->currentRuntimeUser() !== 'root' && $this->localPrivilegeBridgeUsable());
         $connection->setTimeout((int) $settings['probe_timeout']);
 
         $probe = [
@@ -47,8 +47,17 @@ trait ProbesWpToolkitRuntime
                 $result['version'] = $check['lines'][0] ?? null;
                 $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
             } else {
-                $result['exists'] = file_exists($candidate);
-                $result['executable'] = $result['exists'] ? is_executable($candidate) : false;
+                // CRITICAL - see BUGLOG.md WPTOOLKIT-LOCAL-005. Probe in the
+                // same execution context as real commands, not PHP's app user.
+                if ($connection->runsPrivileged()) {
+                    $exists = $this->runCommandWithExitCode($connection, 'test -e ' . escapeshellarg($candidate));
+                    $executable = $this->runCommandWithExitCode($connection, 'test -x ' . escapeshellarg($candidate));
+                    $result['exists'] = $exists['exit_code'] === 0;
+                    $result['executable'] = $executable['exit_code'] === 0;
+                } else {
+                    $result['exists'] = file_exists($candidate);
+                    $result['executable'] = $result['exists'] ? is_executable($candidate) : false;
+                }
                 if ($result['exists'] && $result['executable']) {
                     $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --version 2>&1 | head -n 1');
                     $result['exit_code'] = $check['exit_code'];
@@ -96,7 +105,7 @@ trait ProbesWpToolkitRuntime
         }
 
         $settings = $this->runtimeSettings();
-        $connection ??= new LocalShellConnection(base_path());
+        $connection ??= new LocalShellConnection(base_path(), $this->currentRuntimeUser() !== 'root' && $this->localPrivilegeBridgeUsable());
         $connection->setTimeout((int) $settings['probe_timeout']);
 
         $probe = [
@@ -127,8 +136,17 @@ trait ProbesWpToolkitRuntime
                 $result['version'] = $check['lines'][0] ?? null;
                 $result['usable'] = (int) ($check['exit_code'] ?? 1) === 0;
             } else {
-                $result['exists'] = file_exists($candidate);
-                $result['executable'] = $result['exists'] ? is_executable($candidate) : false;
+                // CRITICAL - see BUGLOG.md WPTOOLKIT-LOCAL-005. Probe in the
+                // same execution context as real commands, not PHP's app user.
+                if ($connection->runsPrivileged()) {
+                    $exists = $this->runCommandWithExitCode($connection, 'test -e ' . escapeshellarg($candidate));
+                    $executable = $this->runCommandWithExitCode($connection, 'test -x ' . escapeshellarg($candidate));
+                    $result['exists'] = $exists['exit_code'] === 0;
+                    $result['executable'] = $executable['exit_code'] === 0;
+                } else {
+                    $result['exists'] = file_exists($candidate);
+                    $result['executable'] = $result['exists'] ? is_executable($candidate) : false;
+                }
                 if ($result['exists'] && $result['executable']) {
                     $check = $this->runCommandWithExitCode($connection, escapeshellarg($candidate) . ' --info 2>&1 | head -n 1');
                     $result['exit_code'] = $check['exit_code'];

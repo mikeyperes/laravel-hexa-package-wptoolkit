@@ -191,16 +191,19 @@ echo wp_json_encode($publishers);
 PHP;
 
         $encoded = base64_encode($php);
-        $output = trim($this->execWithConnection(
+        $commandResult = $this->runCommandWithExitCode(
             $connection,
-            "CODE=\$(echo " . escapeshellarg($encoded) . " | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>/dev/null"
-        ));
-
-        $authors = [];
+            "CODE=\$(echo " . escapeshellarg($encoded) . " | base64 -d) && {$wpCliBase} eval \"\$CODE\" 2>&1"
+        );
+        if (($commandResult['exit_code'] ?? 1) !== 0) {
+            return ['success' => false, 'authors' => [], 'message' => 'WordPress author command failed (exit ' . ($commandResult['exit_code'] ?? 'unknown') . ').'];
+        }
+        $output = trim((string) $commandResult['clean_output']);
+        $authors = null;
         foreach (explode("\n", $output) as $line) {
             $line = trim($line);
             if (str_starts_with($line, '[') || str_starts_with($line, '{')) {
-                $authors = json_decode($line, true) ?: [];
+                $authors = json_decode($line, true);
                 break;
             }
         }

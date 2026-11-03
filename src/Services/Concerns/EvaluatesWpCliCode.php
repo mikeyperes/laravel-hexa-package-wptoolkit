@@ -296,7 +296,7 @@ trait EvaluatesWpCliCode
     // === localFilesystemCommand ===
     protected function localFilesystemCommand(SSH2|LocalShellConnection $connection, string $command): string
     {
-        if ($connection instanceof LocalShellConnection && $this->currentRuntimeUser() !== "root" && $this->localPrivilegeBridgeUsable()) {
+        if ($connection instanceof LocalShellConnection && !$connection->runsPrivileged() && $this->currentRuntimeUser() !== "root" && $this->localPrivilegeBridgeUsable()) {
             return "sudo -n /usr/local/bin/hexa-wp-local-fs " . escapeshellarg(base64_encode($command));
         }
 

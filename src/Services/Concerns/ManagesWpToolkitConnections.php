@@ -230,7 +230,7 @@ trait ManagesWpToolkitConnections
             'mode' => 'local',
         ]);
 
-        $connection = new LocalShellConnection(base_path());
+        $connection = new LocalShellConnection(base_path(), $this->currentRuntimeUser() !== 'root' && $this->localPrivilegeBridgeUsable());
         $connection->setTimeout($this->commandTimeoutSeconds());
 
         return [

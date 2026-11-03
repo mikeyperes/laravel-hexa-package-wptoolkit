@@ -114,3 +114,14 @@ Toolkit package.
 - Root cause: --info can return path=/public_html rather than fullPath; treating that as an absolute host path would also be incorrect.
 - Patch: use fullPath when present; otherwise reuse the existing full-inventory parser and match the exact installation ID to obtain its absolute path. Cache the normalized result.
 - Guard: NativeInstallPathTest covers relative metadata, both installation IDs, old absolute metadata, caching and unknown-ID refusal.
+
+
+## WPTOOLKIT-LOCAL-005 - Root-only Toolkit launcher forced failing SSH fallback
+
+- Severity: High.
+- Status: Fixed in 3.3.14.
+- Symptom: Daily campaign preparation stopped with WordPress author lookup failed before generation.
+- Impact: Publish could not verify authors for same-host WordPress installations.
+- Root cause: Local binary checks ran as the application user against a root-only vendor launcher, even though the established privileged local bridge was available. Auto mode consequently selected SSH without usable stored authentication.
+- Patch: Local connections explicitly use the existing bridge when available; binary probes use that same execution context. Native WP-CLI reuses the existing installation-owner and CLI-PHP resolver instead of the CGI PHP from PATH, and existing filesystem operations avoid double wrapping. Author listing checks command exit and JSON parsing so a failed command cannot become a successful empty cached directory. Vendor permissions, SSH credentials and campaign settings remain unchanged.
+- Guard: The explicit LocalShellConnection privileged flag binds probe and execution context. Operational recovery reads the previously failing author directory through the normal campaign service.

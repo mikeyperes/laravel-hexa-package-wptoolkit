@@ -12,17 +12,11 @@ trait RunsWpCliCommands
     protected function wpCliBaseCommand(WhmServer $server, SSH2|LocalShellConnection $connection, int $installId): string
     {
         if ($connection instanceof LocalShellConnection) {
-            $localProbe = $this->probeLocalRuntime();
-            $runtimeUser = strtolower(trim((string) ($localProbe['runtime_user'] ?? '')));
-            $localWpBinary = $this->localWpCliBinary($connection);
-            $installPath = $this->resolveInstallPath($server, $connection, $installId);
-
-            if ($localWpBinary && $installPath) {
-                $command = escapeshellarg($localWpBinary) . " --path=" . escapeshellarg($installPath);
-                if ($runtimeUser === "root") {
-                    $command .= " --allow-root";
-                }
-                return $command;
+            // CRITICAL - see BUGLOG.md WPTOOLKIT-LOCAL-005. Use the existing
+            // installation-owner and CLI-PHP resolver, never the CGI PHP PATH.
+            $native = $this->resolveNativeWpCli($server, $connection, $installId);
+            if ($native['success'] ?? false) {
+                return $native['command'];
             }
         }
 
