@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.3.16 - 2026-11-05
+
+- Add server-wide WordPress database campaigns with WP Toolkit plus filesystem coverage, cPanel grant grouping, protected credential rotation, exact old-login 1045 proof, atomic wp-config publication, verified rollback, streamed per-item reports, and private JSON/CSV artifacts.
+- Add mapped and unmapped database context with every WordPress options table, evidence-qualified timestamps, protected application/config/job references, and review-only deletion assessments.
+
 ## 3.3.15 - 2026-11-03
 
 - WPTOOLKIT-LOCAL-006: verify and explicitly bind CLI PHP for every native command, including uncached sites and non-root execution; invalidate older command cache entries.

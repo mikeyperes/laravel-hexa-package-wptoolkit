@@ -36,6 +36,7 @@ class WpToolkitServiceProvider extends ServiceProvider
                 \hexa_package_wptoolkit\Console\Commands\MediaScanCommand::class,
                 \hexa_package_wptoolkit\Console\Commands\LoginCommand::class,
                 \hexa_package_wptoolkit\Console\Commands\RegisterUnlistedCommand::class,
+                \hexa_package_wptoolkit\Console\Commands\WordPressDatabaseCampaignCommand::class,
             ]);
         }
 
