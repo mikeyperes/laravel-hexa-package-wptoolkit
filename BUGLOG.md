@@ -1,5 +1,20 @@
 # WP Toolkit Bug Log
 
+## WPDB-CAMPAIGN-001 — Grant inventory omitted its required user
+- Severity: High. Fixed in 3.3.17.
+- Symptom/impact: cPanel returned Provide the user argument, blocking inventory and safe rotation.
+- Cause: The privilege call omitted user and interpreted its flat privilege-string response as user rows.
+- Patch: Resolve attached users from list_databases; query each exact database/user pair.
+- Guard: Require named attachments and successful pair-specific responses. Live read-only reproduction failed without user and returned ALL PRIVILEGES with it. No source tests requested.
+
+## WPDB-CAMPAIGN-002 — Full individual reports were delayed until the whole scan
+- Severity: High. Fixed in 3.3.17.
+- Symptom/impact: Live inspection events exposed only counters, so database/check details were unavailable inline.
+- Cause: Full reports were assembled only after all installation and account work.
+- Patch: Emit a complete safe inspection report before the next installation and retain later dependency reconciliation.
+- Guard: Command refuses report events without cPanel account, configuration identity, before/change/old/new/after/recovery/context fields. Every event carries the exact server. Inventory never implies a password change.
+
+
 Permanent record of critical and high-severity defects in the reusable WP
 Toolkit package.
 

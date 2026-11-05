@@ -30,3 +30,7 @@ Toolkit versions may return fullPath or a home-relative path from --info. Native
 ## Tests
 
 The focused NativeInstallPathTest and NativeWpCliCacheTest run through the consuming Laravel app's PHPUnit runner. They use fixtures and issue no site writes or emails.
+
+### Per-installation reporting guard
+
+Every inspected installation immediately emits its complete safe report with cPanel account, site/configuration identity, database and HTTP checks, change state, old/new-login fields, recovery, and context. Missing account/identity/report sections stop the runner. Dependency reconciliation updates reports later. Grant inventory resolves each attached user/database pair through cPanel. Inventory does not change passwords.

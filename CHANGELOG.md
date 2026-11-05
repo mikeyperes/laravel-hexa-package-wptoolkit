@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.3.17 - 2026-11-05
+
+- WPDB-CAMPAIGN-001: resolve attached database-user privileges with the required exact user.
+- WPDB-CAMPAIGN-002: emit full individual reports immediately and reject reports without cPanel account, identity, or required fields.
+
 ## 3.3.16 - 2026-11-05
 
 - Add server-wide WordPress database campaigns with WP Toolkit plus filesystem coverage, cPanel grant grouping, protected credential rotation, exact old-login 1045 proof, atomic wp-config publication, verified rollback, streamed per-item reports, and private JSON/CSV artifacts.

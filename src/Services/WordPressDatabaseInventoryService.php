@@ -235,6 +235,7 @@ final class WordPressDatabaseInventoryService
                         'position' => $position + 1,
                         'total' => count($paths),
                         'terminal' => true,
+                        'report' => $this->inspectionReport($installations[array_key_last($installations)]),
                         'success' => false,
                         'server_counters' => [
                             'installations' => [
@@ -299,6 +300,7 @@ final class WordPressDatabaseInventoryService
                     'position' => $position + 1,
                     'total' => count($paths),
                     'terminal' => true,
+                    'report' => $this->inspectionReport($installations[array_key_last($installations)]),
                     'success' => (bool) ($installations[array_key_last($installations)]['database_check']['success'] ?? false)
                         && (bool) ($installations[array_key_last($installations)]['http_checks']['home']['reachable'] ?? false)
                         && (bool) ($installations[array_key_last($installations)]['http_checks']['login']['reachable'] ?? false),
@@ -346,27 +348,27 @@ final class WordPressDatabaseInventoryService
                     'name' => $name,
                     'size_bytes' => is_numeric($row['disk_usage'] ?? null) ? (int) $row['disk_usage'] : null,
                 ];
-                $privilegeResult = $this->whm->api()->cpanelApiCall(
-                    $server,
-                    $account,
-                    'Mysql',
-                    'get_privileges_on_database',
-                    ['database' => $name],
-                );
-                if (!($privilegeResult['success'] ?? false)) {
-                    throw new RuntimeException('cPanel grant inventory failed for database '.$name.'.');
-                }
-                foreach ($this->rows($privilegeResult['data'] ?? [], 'user') as $grant) {
-                    $user = (string) ($grant['user'] ?? $grant['username'] ?? $grant['name'] ?? '');
-                    if ($user !== '') {
-                        $grants[$user][$name] = [
-                            'account' => $account,
-                            'privileges' => array_values(array_filter(
-                                (array) ($grant['privileges'] ?? []),
-                                'is_string',
-                            )),
-                        ];
+                // CRITICAL — see BUGLOG.md WPDB-CAMPAIGN-001.
+                foreach ((array) ($row['users'] ?? []) as $attachedUser) {
+                    $user = is_string($attachedUser)
+                        ? $attachedUser
+                        : (string) ($attachedUser['user'] ?? $attachedUser['username'] ?? $attachedUser['name'] ?? '');
+                    if ($user === '') {
+                        throw new RuntimeException('cPanel returned an unnamed database-user attachment.');
                     }
+                    $privilegeResult = $this->whm->api()->cpanelApiCall(
+                        $server, $account, 'Mysql', 'get_privileges_on_database',
+                        ['database' => $name, 'user' => $user],
+                    );
+                    if (!($privilegeResult['success'] ?? false)) {
+                        throw new RuntimeException('cPanel grant inventory failed for database '.$name.' and user '.$user.'.');
+                    }
+                    $grants[$user][$name] = [
+                        'account' => $account,
+                        'privileges' => array_values(array_filter(
+                            (array) ($privilegeResult['data'] ?? []), 'is_string',
+                        )),
+                    ];
                 }
             }
             foreach ($this->rows($userResult['data'] ?? [], 'user') as $row) {
@@ -598,6 +600,21 @@ final class WordPressDatabaseInventoryService
             'recovery' => ['outcome' => 'not_needed', 'error' => null],
             'context' => 'Inventory and baseline only; no password rotation was requested.',
         ];
+    }
+
+    /** CRITICAL — see BUGLOG.md WPDB-CAMPAIGN-002. */
+    private function inspectionReport(array $installation): array
+    {
+        if (trim((string) ($installation['account'] ?? '')) === ''
+            || trim((string) ($installation['config_path'] ?? '')) === '') {
+            throw new RuntimeException('Individual reporting requires a cPanel account and configuration identity.');
+        }
+        $report = $this->inventorySiteReport($installation, null);
+        $report['change']['outcome'] = 'inventory_in_progress';
+        $report['change']['reason'] = 'Dependency grouping follows these checks; no password changed.';
+        $report['context'] = 'Individual installation inspection; ownership and shared dependents are still being reconciled.';
+
+        return $report;
     }
 
     private function safeProbe(array $probe): array

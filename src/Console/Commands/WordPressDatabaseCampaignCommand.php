@@ -36,10 +36,25 @@ final class WordPressDatabaseCampaignCommand extends Command
             return $this->failResult('server_not_found', 'The selected WHM server does not exist.');
         }
 
-        $reporter = function (string $event, array $details = []): void {
+        $reporter = function (string $event, array $details = []) use ($server): void {
+            // CRITICAL — see BUGLOG.md WPDB-CAMPAIGN-002.
+            if (in_array($event, ['installation_inspected', 'site_terminal_report'], true)) {
+                $report = $details['report'] ?? [];
+                $site = $report['site'] ?? [];
+                if (trim((string) ($site['account'] ?? '')) === ''
+                    || trim((string) ($site['config_path'] ?? $site['path'] ?? '')) === '') {
+                    throw new \RuntimeException('Per-installation reporting requires a complete report with cPanel account and site identity.');
+                }
+                foreach (['before', 'change', 'new_login', 'old_login', 'after', 'recovery', 'context'] as $field) {
+                    if (!array_key_exists($field, $report)) {
+                        throw new \RuntimeException('The per-installation reporting guard rejected an incomplete report.');
+                    }
+                }
+            }
             $payload = json_encode([
                 'type' => 'progress',
                 'event' => $event,
+                'server' => (int) $server->id,
                 'at' => now()->utc()->toIso8601String(),
                 ...$details,
             ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
