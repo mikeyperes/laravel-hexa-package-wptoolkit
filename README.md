@@ -34,3 +34,7 @@ The focused NativeInstallPathTest and NativeWpCliCacheTest run through the consu
 ### Per-installation reporting guard
 
 Every inspected installation immediately emits its complete safe report with cPanel account, site/configuration identity, database and HTTP checks, change state, old/new-login fields, recovery, and context. Missing account/identity/report sections stop the runner. Dependency reconciliation updates reports later. Grant inventory resolves each attached user/database pair through cPanel. Inventory does not change passwords.
+
+### Scheduled-job dependency coverage
+
+Database campaigns use cPanel API 2 Cron::listcron through the existing WHM proxy because cPanel provides no UAPI equivalent. A missing/failed event status blocks inventory; it cannot become an empty job list or evidence of an orphan. Job contents remain protected within dependency analysis.

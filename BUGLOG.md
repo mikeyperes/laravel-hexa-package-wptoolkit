@@ -1,5 +1,13 @@
 # WP Toolkit Bug Log
 
+## WPDB-CAMPAIGN-003 — Scheduled-job inventory used an unavailable UAPI module
+- Severity: High. Fixed in 3.3.18.
+- Symptom/impact: Both-server inventory could not finish, blocking database mapping and every safe password swap.
+- Cause: Cron::list_cron_jobs does not exist in cPanel UAPI; the supported listing remains API 2 Cron::listcron.
+- Patch: Use the existing WHM proxy for the account-scoped API 2 call and require cpanelresult.event.result=1 before reading command rows.
+- Guard: Provider, database and job inventory errors still block coverage; no empty-list fallback or orphan assumption. No source tests requested.
+
+
 ## WPDB-CAMPAIGN-001 — Grant inventory omitted its required user
 - Severity: High. Fixed in 3.3.17.
 - Symptom/impact: cPanel returned Provide the user argument, blocking inventory and safe rotation.

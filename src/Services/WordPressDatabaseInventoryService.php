@@ -333,7 +333,21 @@ final class WordPressDatabaseInventoryService
         foreach ($accounts as $account => $metadata) {
             $dbResult = $this->whm->api()->cpanelApiCall($server, $account, 'Mysql', 'list_databases');
             $userResult = $this->whm->api()->cpanelApiCall($server, $account, 'Mysql', 'list_users');
-            $cronResult = $this->whm->api()->cpanelApiCall($server, $account, 'Cron', 'list_cron_jobs');
+            // CRITICAL — see BUGLOG.md WPDB-CAMPAIGN-003.
+            // cPanel has no UAPI equivalent for Cron::listcron.
+            $cronResponse = $this->whm->api()->apiCall($server, 'cpanel', [
+                'cpanel_jsonapi_user' => $account,
+                'cpanel_jsonapi_apiversion' => 2,
+                'cpanel_jsonapi_module' => 'Cron',
+                'cpanel_jsonapi_func' => 'listcron',
+            ]);
+            $cronPayload = $cronResponse['data']['cpanelresult'] ?? null;
+            $cronResult = [
+                'success' => ($cronResponse['success'] ?? false)
+                    && is_array($cronPayload)
+                    && (int) ($cronPayload['event']['result'] ?? 0) === 1,
+                'data' => is_array($cronPayload) ? ($cronPayload['data'] ?? []) : [],
+            ];
             if (!($dbResult['success'] ?? false) || !($userResult['success'] ?? false) || !($cronResult['success'] ?? false)) {
                 throw new RuntimeException('cPanel database or cron inventory failed for account '.$account.'.');
             }

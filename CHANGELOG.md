@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.3.18 - 2026-11-05
+
+- WPDB-CAMPAIGN-003: list scheduled jobs through native API 2 Cron::listcron, require its explicit event success, and retain incomplete-coverage failure on errors.
+
 ## 3.3.17 - 2026-11-05
 
 - WPDB-CAMPAIGN-001: resolve attached database-user privileges with the required exact user.
