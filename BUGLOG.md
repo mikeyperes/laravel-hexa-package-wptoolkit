@@ -1,28 +1,5 @@
 # WP Toolkit Bug Log
 
-## WPDB-CAMPAIGN-003 — Scheduled-job inventory used an unavailable UAPI module
-- Severity: High. Fixed in 3.3.18.
-- Symptom/impact: Both-server inventory could not finish, blocking database mapping and every safe password swap.
-- Cause: Cron::list_cron_jobs does not exist in cPanel UAPI; the supported listing remains API 2 Cron::listcron.
-- Patch: Use the existing WHM proxy for the account-scoped API 2 call and require cpanelresult.event.result=1 before reading command rows.
-- Guard: Provider, database and job inventory errors still block coverage; no empty-list fallback or orphan assumption. No source tests requested.
-
-
-## WPDB-CAMPAIGN-001 — Grant inventory omitted its required user
-- Severity: High. Fixed in 3.3.17.
-- Symptom/impact: cPanel returned Provide the user argument, blocking inventory and safe rotation.
-- Cause: The privilege call omitted user and interpreted its flat privilege-string response as user rows.
-- Patch: Resolve attached users from list_databases; query each exact database/user pair.
-- Guard: Require named attachments and successful pair-specific responses. Live read-only reproduction failed without user and returned ALL PRIVILEGES with it. No source tests requested.
-
-## WPDB-CAMPAIGN-002 — Full individual reports were delayed until the whole scan
-- Severity: High. Fixed in 3.3.17.
-- Symptom/impact: Live inspection events exposed only counters, so database/check details were unavailable inline.
-- Cause: Full reports were assembled only after all installation and account work.
-- Patch: Emit a complete safe inspection report before the next installation and retain later dependency reconciliation.
-- Guard: Command refuses report events without cPanel account, configuration identity, before/change/old/new/after/recovery/context fields. Every event carries the exact server. Inventory never implies a password change.
-
-
 Permanent record of critical and high-severity defects in the reusable WP
 Toolkit package.
 
