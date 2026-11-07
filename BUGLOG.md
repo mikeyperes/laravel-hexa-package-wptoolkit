@@ -31,7 +31,8 @@ Toolkit package.
   its default-user fallback could silently select a different administrator.
 - **Patch:** Read only the preferred username and perform one bounded WordPress
   administrator lookup, preserving the connection through bootstrap creation.
-  An invalid preferred user fails instead of selecting another person. The thin
+  An explicitly requested invalid user fails instead of selecting another person.
+  Default selection now follows LOGIN-BUG-003 below. The thin
   `wptoolkit:login` command reuses exact bindings and issues requested links in
   one application process through the existing services.
 - **Guard:** The login-only method does not call `getCredentials()`; existing
@@ -136,3 +137,13 @@ Toolkit package.
 - Root cause: Native command resolution probed unqualified php inside the privileged login shell, which resolved to php-cgi. A previously cached native command let Breaking9to5 pass while uncached sites failed.
 - Patch: For same-host execution, probe the application's CLI binary and its PHP installation's CLI sibling before PATH. Require an actual cli SAPI and bind its absolute path for every user context. Remote resolution continues to use the remote interpreter. Version the native command cache key so old commands cannot retain ambiguous PHP resolution.
 - Guard: directWpCliCommand verifies CLI SAPI before constructing commands and fails closed if no supported candidate works. Read the formerly failing manifest through the normal WordPress manager after release.
+
+## LOGIN-BUG-003 - Default login stopped on sites with multiple administrators
+
+- **Severity:** High.
+- **Status:** Fixed in 3.3.20.
+- **Symptom:** wealthdefined.com could not generate a default WordPress login link with three administrators.
+- **Impact:** One-click access stopped and required the caller to name an administrator.
+- **Root cause:** The default lookup required a unique administrator and treated a saved Toolkit login as an explicit caller choice.
+- **Patch:** Track explicit caller intent separately. For defaults, retain a saved administrator or select one administrator ordered by ascending user ID. Explicit users must still be administrators. Successful results report `wp_user`.
+- **Guard:** The LOGIN-BUG-003 marker preserves explicit-user validation and confines automatic fallback to default selection. The requested live proof generates an unused link for wealthdefined.com.

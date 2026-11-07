@@ -151,11 +151,12 @@ PHP;
             'success'    => true,
             'url'        => $loginUrl,
             'expires_in' => $ttl,
+            'wp_user'    => $wpUser,
         ];
     }
 
     /**
-     * Resolve the existing preferred administrator and generate its login in one call.
+     * Resolve an explicit or default administrator and generate its login in one call.
      * Callers supply an exact installation binding from managed inventory.
      * Credential-bearing discovery results remain inside the service.
      */
@@ -172,8 +173,10 @@ PHP;
             return ['success' => false, 'error' => 'Unable to connect to the WordPress host.'];
         }
 
+        $explicitUser = $preferredUser !== '';
+
         try {
-            if ($preferredUser === '') {
+            if (! $explicitUser) {
                 // Read only the preferred username, never passwords or DB credentials.
                 $query = 'SELECT value FROM InstanceProperties WHERE instanceId = '.(int) $installId
                     ." AND name = 'login' LIMIT 1";
@@ -184,18 +187,21 @@ PHP;
                 }
             }
 
-            $php = str_replace('__PREFERRED__', var_export($preferredUser, true), <<<'PHP'
+            // CRITICAL - see BUGLOG.md LOGIN-BUG-003: only default selection may fall back.
+            $php = str_replace(['__PREFERRED__', '__EXPLICIT__'],
+                [var_export($preferredUser, true), var_export($explicitUser, true)], <<<'PHP'
 $preferred = __PREFERRED__;
-if ($preferred !== '') {
-    $user = get_user_by('login', $preferred);
-} else {
-    $ids = get_users(['role' => 'administrator', 'number' => 2, 'fields' => 'ID',
+$explicit = __EXPLICIT__;
+$user = $preferred !== '' ? get_user_by('login', $preferred) : false;
+if (!$explicit && (!$user || !in_array('administrator', (array) $user->roles, true))) {
+    $ids = get_users(['role' => 'administrator', 'number' => 1, 'fields' => 'ID',
+        'orderby' => 'ID', 'order' => 'ASC',
         'count_total' => false, 'cache_results' => false]);
-    $user = count($ids) === 1 ? get_user_by('id', $ids[0]) : false;
+    $user = $ids ? get_user_by('id', $ids[0]) : false;
 }
 if (!$user || !in_array('administrator', (array) $user->roles, true)) {
     echo wp_json_encode(['success' => false,
-        'error' => 'No unique valid administrator; specify the intended user.']);
+        'error' => $explicit ? 'The requested user is not an administrator.' : 'No administrator found.']);
 } else {
     echo wp_json_encode(['success' => true, 'wp_user' => $user->user_login]);
 }

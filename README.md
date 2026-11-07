@@ -3,6 +3,7 @@
 ## Features
 
 - Reuses protected WHM connections to inventory WordPress installations and their owning accounts.
+- Generates one-click WordPress login links as the saved Toolkit administrator, falling back to the administrator with the lowest user ID. Explicitly requested users must be administrators. Successful results identify the selected account in `wp_user`.
 - Provides WP-CLI reads and writes, plugin/theme operations, media and taxonomy operations, backups and exact-site login generation.
 - Resolves native plugin-loaded WP-CLI commands under the installation owner and preserves a CLI PHP interpreter.
 - Caches installation and native command metadata through the existing persistent state owner.

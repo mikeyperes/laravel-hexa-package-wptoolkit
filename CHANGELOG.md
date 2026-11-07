@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.3.20 - 2026-11-07
+
+- LOGIN-BUG-003: use the saved Toolkit administrator for default login selection, otherwise select the administrator with the lowest user ID. Explicit users still require the administrator role; successful login results include `wp_user`.
+
 ## 3.3.15 - 2026-11-03
 
 - WPTOOLKIT-LOCAL-006: verify and explicitly bind CLI PHP for every native command, including uncached sites and non-root execution; invalidate older command cache entries.
